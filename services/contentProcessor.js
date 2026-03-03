@@ -8,7 +8,7 @@ import { YoutubeTranscript } from 'youtube-transcript';
 import OpenAI from 'openai';
 import { analyzeWithGemini, extractClaimsWithGemini } from '../geminiService.js';
 import { extractTextFromDocument } from './documentService.js';
-import { getYoutubeTranscript } from './youtubeTranscriptService.js';
+import { transcribeYoutubeUrl } from './youtubeTranscription.service.ts';
 import { getRulesForSelection } from './rulesService.js';
 import AuditRecord from '../models/AuditRecord.js';
 import { extractTextFromImage } from './ocrService.js';
@@ -468,11 +468,11 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
   if (isYouTubeUrl(url)) {
     let transcriptText = '';
     try {
-      console.log('[YouTube Transcript] Captions -> Audio fallback flow enabled');
-      transcriptText = await getYoutubeTranscript(url);
-      console.log(`[YouTube Transcript] Transcript length: ${transcriptText.length} chars`);
+      console.log('[YouTube] Using yt-dlp-exec for YouTube transcription');
+      transcriptText = await transcribeYoutubeUrl(url);
+      console.log(`[YouTube] Transcript length: ${transcriptText.length} chars`);
     } catch (error) {
-      console.warn('[YouTube Transcript] Fallback to metadata after audio/transcript failure:', error.message);
+      console.warn('[YouTube] YouTube transcription failed, falling back to metadata:', error.message);
       transcriptText = await fetchYouTubeFallbackText(url, error.message);
     }
 

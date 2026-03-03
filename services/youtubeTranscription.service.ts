@@ -156,6 +156,7 @@ export const transcribeYoutubeUrl = async (url: string): Promise<string> => {
   let audioPath = '';
   try {
     console.log(`[YouTube] Starting transcription for: ${url}`);
+    console.log('[YouTube] Proxy in use:', process.env.PROXY_URL ? 'YES' : 'NO');
     console.log(`[YouTube] Proxy in use: ${proxyUrl ? 'YES' : 'NO'}`);
     if (proxyUrl) {
       console.log(`[YouTube] Proxy URL (masked): ${proxyUrl.replace(/:[^@]*@/, ':***@')}`);

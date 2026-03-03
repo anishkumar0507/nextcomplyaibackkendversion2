@@ -1,5 +1,5 @@
 import express from 'express';
-import { getYoutubeTranscript } from '../services/youtubeTranscriptService.js';
+import { transcribeYoutubeUrl } from '../services/youtubeTranscription.service.ts';
 
 const router = express.Router();
 
@@ -10,7 +10,7 @@ router.post('/transcript', async (req, res) => {
       return res.status(400).json({ error: 'Invalid URL. Provide a valid URL string.' });
     }
 
-    const transcript = await getYoutubeTranscript(url);
+    const transcript = await transcribeYoutubeUrl(url);
     return res.json({ transcript });
   } catch (error) {
     console.error('[Transcript] Error:', error);
