@@ -9,6 +9,40 @@ const MODEL = 'whisper-1';
 
 let openaiClient: OpenAI | null = null;
 
+// Proxy configuration - check process.env.PROXY_URL first
+const buildProxyUrl = (): string | null => {
+  // Direct PROXY_URL env variable (primary source)
+  if (process.env.PROXY_URL) {
+    console.log('[YouTube] ✅ Proxy enabled from PROXY_URL');
+    return process.env.PROXY_URL;
+  }
+
+  // Fallback to component-based proxy construction
+  const host = process.env.PROXY_HOST;
+  const port = process.env.PROXY_PORT;
+  const id = process.env.PROXY_ID;
+  const password = process.env.PROXY_PASSWORD;
+
+  const missing: string[] = [];
+  if (!host) missing.push('PROXY_HOST');
+  if (!port) missing.push('PROXY_PORT');
+  if (!id) missing.push('PROXY_ID');
+  if (!password) missing.push('PROXY_PASSWORD');
+
+  if (missing.length > 0) {
+    console.log('[YouTube] Proxy in use: NO');
+    console.log('[YouTube] ⚠️  Proxy disabled (env variables missing)');
+    console.log('[YouTube] Missing variables:', missing.join(', '));
+    return null;
+  }
+
+  const proxyUrl = `http://${id}:${password}@${host}:${port}`;
+  console.log(`[YouTube] ✅ Proxy enabled: ${host}:${port}`);
+  return proxyUrl;
+};
+
+const proxyUrl = buildProxyUrl();
+
 const getOpenAIClient = (): OpenAI => {
   if (!openaiClient) {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -26,13 +60,27 @@ const safeDelete = async (filePath: string): Promise<void> => {
     await fs.promises.unlink(filePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn('[URL Audit] Failed to delete temp file:', (error as Error).message);
+      console.warn('[YouTube] Failed to delete temp file:', (error as Error).message);
     }
   }
 };
 
 const runYtDlpFallback = async (url: string, outputPath: string): Promise<void> => {
-  const args = ['-x', '--audio-format', 'mp3', '-o', outputPath, url];
+  const args = [
+    '-x',
+    '--audio-format', 'mp3',
+    '-o', outputPath,
+    '--geo-bypass',
+    '--no-check-certificates',
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36'
+  ];
+
+  if (proxyUrl) {
+    console.log('[YouTube] Adding proxy to yt-dlp binary fallback');
+    args.push('--proxy', proxyUrl);
+  }
+
+  args.push(url);
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn('yt-dlp', args, { windowsHide: true });
@@ -77,15 +125,32 @@ const downloadYoutubeAudio = async (url: string): Promise<string> => {
   const tempPath = path.join(os.tmpdir(), `yt-audio-${Date.now()}.mp3`);
 
   try {
-    await ytdlp(url, {
+    console.log(`[YouTube] Proxy in use: ${proxyUrl ? 'YES' : 'NO'}`);
+    
+    const options: Record<string, any> = {
       output: tempPath,
       extractAudio: true,
       audioFormat: 'mp3',
       format: 'bestaudio/best',
-      noPlaylist: true
-    });
+      noPlaylist: true,
+      geoBypass: true,
+      noCheckCertificates: true,
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36'
+    };
+
+    if (proxyUrl) {
+      console.log(`[YouTube] Applying proxy to yt-dlp-exec: ${proxyUrl.replace(/:[^@]*@/, ':***@')}`);
+      options.proxy = proxyUrl;
+    } else {
+      console.log('[YouTube] No proxy configured - direct download (may encounter 410 errors on Render)');
+    }
+
+    console.log('[YouTube] Starting yt-dlp-exec download...');
+    await ytdlp(url, options);
+    console.log('[YouTube] yt-dlp-exec download succeeded');
   } catch (error) {
-    console.warn('[URL Audit] yt-dlp-exec failed, falling back to binary:', (error as Error).message);
+    console.warn('[YouTube] yt-dlp-exec failed, falling back to binary:', (error as Error).message);
+    console.log('[YouTube] Attempting fallback with yt-dlp binary...');
     await runYtDlpFallback(url, tempPath);
   }
 
@@ -113,9 +178,18 @@ const transcribeAudioFile = async (filePath: string): Promise<string> => {
 export const transcribeYoutubeUrl = async (url: string): Promise<string> => {
   let audioPath = '';
   try {
+    console.log(`[YouTube] Starting transcription for: ${url}`);
+    console.log(`[YouTube] Proxy in use: ${proxyUrl ? 'YES' : 'NO'}`);
+    if (proxyUrl) {
+      console.log(`[YouTube] Proxy URL (masked): ${proxyUrl.replace(/:[^@]*@/, ':***@')}`);
+    }
+    
     audioPath = await downloadYoutubeAudio(url);
-    return await transcribeAudioFile(audioPath);
+    const transcript = await transcribeAudioFile(audioPath);
+    console.log('[YouTube] Transcription completed successfully');
+    return transcript;
   } catch (error) {
+    console.error('[YouTube] Transcription failed:', (error as Error).message);
     throw new Error(`YouTube transcription failed: ${(error as Error).message}`);
   } finally {
     if (audioPath) {
