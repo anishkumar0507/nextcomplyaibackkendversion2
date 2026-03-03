@@ -7,6 +7,18 @@ import { connectDB } from './config/database.js';
 import auditRoutes from './routes/auditRoutes.js';
 import rulesRoutes from './routes/rulesRoutes.js';
 import urlAuditRoutes from './routes/urlAudit.route.ts';
+import { createServer } from 'http';
+
+// FIX 6: Socket.io for rule update notifications (optional - install with: npm install socket.io)
+let io = null;
+try {
+  const socketIO = await import('socket.io');
+  io = socketIO.Server;
+  console.log('[Server] ✓ Socket.IO available for rule updates');
+} catch (e) {
+  console.warn('[Server] ⚠️ Socket.IO not installed - rule update notifications disabled');
+  console.warn('[Server]    Install with: npm install socket.io');
+}
 
 // Import auth routes
 console.log('[Server] Importing auth routes...');
@@ -63,6 +75,53 @@ if (missingEnv.length > 0) {
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// FIX 6: Create HTTP server for Socket.IO support
+const httpServer = createServer(app);
+
+// FIX 6: Initialize Socket.IO if available
+let socketServer = null;
+if (io) {
+  socketServer = new io(httpServer, {
+    cors: {
+      origin: [
+        'https://nextcomplyai.com',
+        'https://www.nextcomplyai.com',
+        'https://www.nextdoc.in',
+        'https://nextdoc.in',
+        'http://localhost:3000',
+        'http://localhost:5173'
+      ],
+      methods: ['GET', 'POST'],
+      credentials: true
+    }
+  });
+  
+  socketServer.on('connection', (socket) => {
+    console.log('[WebSocket] Client connected:', socket.id);
+    
+    socket.on('disconnect', () => {
+      console.log('[WebSocket] Client disconnected:', socket.id);
+    });
+  });
+  
+  console.log('[Server] ✓ WebSocket server initialized for rule updates');
+}
+
+// Export function to emit rule update notifications
+export const notifyRuleUpdate = (updateData = {}) => {
+  if (socketServer) {
+    socketServer.emit('rule-update', {
+      timestamp: new Date().toISOString(),
+      version: updateData.version || Date.now(),
+      message: 'Rule pack updated - please refresh to load latest rules',
+      ...updateData
+    });
+    console.log('[WebSocket] Emitted rule-update event to all clients');
+  } else {
+    console.warn('[WebSocket] Cannot emit rule-update - Socket.IO not available');
+  }
+};
 
 // CORS Configuration - MUST be before routes
 app.use(cors({
@@ -142,7 +201,7 @@ app.use((err, req, res, next) => {
       console.warn('   Set MONGODB_URI in your .env file to enable authentication.');
     }
 
-    app.listen(PORT, () => {
+    httpServer.listen(PORT, () => {
       console.log(`🚀 NextComply AI Backend server running on port ${PORT}`);
       console.log(`📍 Backend URL: http://localhost:${PORT}`);
       console.log(`📍 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
@@ -150,6 +209,7 @@ app.use((err, req, res, next) => {
       console.log(`📍 Vertex AI Location: ${process.env.VERTEX_LOCATION || process.env.VERTEX_AI_LOCATION || 'us-central1'}`);
       console.log(`🔐 Service Account JSON: ${process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON ? '✓ Configured' : '✗ Missing'}`);
       console.log(`💾 MongoDB: ${process.env.MONGODB_URI ? '✓ Configured' : '✗ Missing (Auth disabled)'}`);
+      console.log(`🔌 WebSocket: ${socketServer ? '✓ Enabled (rule updates)' : '✗ Disabled (install socket.io)'}`);
       console.log(`🔗 Available routes:`);
       console.log(`   - GET  /health`);
       console.log(`   - POST /api/analyze`);

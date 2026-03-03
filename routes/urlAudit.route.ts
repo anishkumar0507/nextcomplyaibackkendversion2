@@ -80,7 +80,9 @@ router.post('/url-audit', authMiddleware, async (req, res) => {
 
     if (type === 'youtube') {
       extractedText = await transcribeYoutubeUrl(normalizedUrl);
-    } else if (type === 'media') {
+    } else if (type === 'media' || type === 'drive') {
+      // Google Drive links are converted to direct download URLs by urlDetector
+      console.log(`[URL Audit] Processing ${type} file: ${normalizedUrl}`);
       const { filePath } = await downloadMediaToTemp(normalizedUrl);
       try {
         extractedText = await transcribeMediaFile(filePath);

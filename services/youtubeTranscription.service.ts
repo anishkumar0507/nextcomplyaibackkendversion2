@@ -1,13 +1,9 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import OpenAI from 'openai';
 import ytdlp from 'yt-dlp-exec';
 import { spawn } from 'child_process';
-
-const MODEL = 'whisper-1';
-
-let openaiClient: OpenAI | null = null;
+import { transcribeSmart } from './transcriptionService.js';
 
 // Proxy configuration - check process.env.PROXY_URL first
 const buildProxyUrl = (): string | null => {
@@ -42,18 +38,6 @@ const buildProxyUrl = (): string | null => {
 };
 
 const proxyUrl = buildProxyUrl();
-
-const getOpenAIClient = (): OpenAI => {
-  if (!openaiClient) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error('OPENAI_API_KEY is not set. Required for transcription.');
-    }
-    openaiClient = new OpenAI({ apiKey });
-  }
-
-  return openaiClient;
-};
 
 const safeDelete = async (filePath: string): Promise<void> => {
   try {
@@ -125,7 +109,14 @@ const downloadYoutubeAudio = async (url: string): Promise<string> => {
   const tempPath = path.join(os.tmpdir(), `yt-audio-${Date.now()}.mp3`);
 
   try {
+    console.log(`[YouTube] ===== PROXY CONFIGURATION =====`);
     console.log(`[YouTube] Proxy in use: ${proxyUrl ? 'YES' : 'NO'}`);
+    if (proxyUrl) {
+      console.log(`[YouTube] Proxy URL (masked): ${proxyUrl.replace(/:[^@]*@/, ':***@')}`);
+    }
+    console.log(`[YouTube] forceIpv4: true (prevents 410 errors)`);
+    console.log(`[YouTube] geoBypass: true (bypasses geo restrictions)`);
+    console.log(`[YouTube] ==================================`);
     
     const options: Record<string, any> = {
       output: tempPath,
@@ -134,15 +125,15 @@ const downloadYoutubeAudio = async (url: string): Promise<string> => {
       format: 'bestaudio/best',
       noPlaylist: true,
       geoBypass: true,
+      forceIpv4: true,
       noCheckCertificates: true,
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36'
     };
 
     if (proxyUrl) {
-      console.log(`[YouTube] Applying proxy to yt-dlp-exec: ${proxyUrl.replace(/:[^@]*@/, ':***@')}`);
       options.proxy = proxyUrl;
     } else {
-      console.log('[YouTube] No proxy configured - direct download (may encounter 410 errors on Render)');
+      console.warn('[YouTube] ⚠️ No proxy configured - may encounter 410 errors on Render');
     }
 
     console.log('[YouTube] Starting yt-dlp-exec download...');
@@ -158,21 +149,7 @@ const downloadYoutubeAudio = async (url: string): Promise<string> => {
 };
 
 const transcribeAudioFile = async (filePath: string): Promise<string> => {
-  const client = getOpenAIClient();
-  const response = await client.audio.transcriptions.create({
-    model: MODEL,
-    file: fs.createReadStream(filePath),
-    response_format: 'text'
-  });
-
-  const text = typeof response === 'string' ? response : response?.text || '';
-  const trimmed = text.trim();
-
-  if (!trimmed) {
-    throw new Error('Transcription returned empty text');
-  }
-
-  return trimmed;
+  return await transcribeSmart(filePath);
 };
 
 export const transcribeYoutubeUrl = async (url: string): Promise<string> => {

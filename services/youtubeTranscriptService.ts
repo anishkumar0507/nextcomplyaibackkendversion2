@@ -1,32 +1,16 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import OpenAI from 'openai';
 import ytdl from 'ytdl-core';
 import { YoutubeTranscript } from 'youtube-transcript';
 import { spawn } from 'child_process';
+import { transcribeSmart } from './transcriptionService.js';
 
 const AUDIO_TIMEOUT_MS = 2 * 60 * 1000;
-const TRANSCRIBE_TIMEOUT_MS = 3 * 60 * 1000;
 const MAX_RETRIES = 3;
 const BACKOFF_BASE_MS = 800;
 const BACKOFF_FACTOR = 2;
 const YTDL_EXTRACT_FAILURE = /could not extract functions/i;
-
-let openaiClient: OpenAI | null = null;
-
-const getOpenAIClient = (): OpenAI => {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not set. Required for audio transcription.');
-  }
-
-  if (!openaiClient) {
-    openaiClient = new OpenAI({ apiKey });
-  }
-
-  return openaiClient;
-};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -235,33 +219,8 @@ export const downloadYoutubeAudio = async (videoUrl: string, outputPath: string)
 };
 
 export const transcribeAudioWithOpenAI = async (filePath: string): Promise<string> => {
-  const client = getOpenAIClient();
   console.log('[YouTube Transcript] Transcribing audio...');
-
-  const extension = path.extname(filePath).toLowerCase().replace('.', '');
-  const mimeMap: Record<string, string> = {
-    m4a: 'audio/mp4',
-    mp3: 'audio/mpeg',
-    webm: 'audio/webm',
-    ogg: 'audio/ogg',
-    wav: 'audio/wav'
-  };
-  const mimeType = mimeMap[extension] || 'application/octet-stream';
-
-  const response = await withTimeout(
-    retryWithBackoff(() => client.audio.transcriptions.create({
-      model: 'gpt-4o-transcribe',
-      file: fs.createReadStream(filePath),
-      mime_type: mimeType
-    }), MAX_RETRIES, 'OpenAI transcription'),
-    TRANSCRIBE_TIMEOUT_MS,
-    'Audio transcription timed out'
-  );
-
-  const text = response?.text?.trim() || '';
-  if (!text) {
-    throw new Error('Transcription returned empty text');
-  }
+  const text = await transcribeSmart(filePath);
 
   console.log('[YouTube Transcript] Transcription completed');
   return text;

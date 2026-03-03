@@ -157,9 +157,10 @@ export const analyzeWithGemini = async ({
   const model = vertexAI.getGenerativeModel({
     model: MODEL_NAME,
     generationConfig: {
-      temperature: 0.1,
+      temperature: 0,
+      topP: 1,
+      candidateCount: 1,
       maxOutputTokens: 8192,
-      topP: 0.95,
     },
   });
 
@@ -286,9 +287,10 @@ export const extractClaimsWithGemini = async (text) => {
   const model = vertexAI.getGenerativeModel({
     model: MODEL_NAME,
     generationConfig: {
-      temperature: 0.1,
-      maxOutputTokens: 2048,
-      topP: 0.9
+      temperature: 0,
+      topP: 1,
+      candidateCount: 1,
+      maxOutputTokens: 2048
     }
   });
 

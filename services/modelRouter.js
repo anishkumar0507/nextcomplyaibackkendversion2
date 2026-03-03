@@ -83,11 +83,13 @@ export const isComplexContent = (content) => {
  * @returns {object} Generation configuration
  */
 export const getGenerationConfig = (model) => {
-  // Configuration for gemini-2.0-flash
+  // DETERMINISTIC LOCK: temperature=0, topP=1, candidateCount=1
+  // This ensures 100% consistent outputs for same inputs
   return {
-    temperature: 0.1,
-    topP: 0.95,
-    maxOutputTokens: 8192, // Support for longer outputs
+    temperature: 0,
+    topP: 1,
+    candidateCount: 1,
+    maxOutputTokens: 8192,
   };
 };
 

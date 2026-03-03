@@ -1,5 +1,5 @@
 import { VertexAI } from '@google-cloud/vertexai';
-import { getModelForScanType, getGenerationConfig } from './modelRouter.js';
+import { selectGeminiModel, getGenerationConfig } from './modelRouter.js';
 
 /**
  * AI Audit Service
@@ -231,7 +231,11 @@ Return JSON:
       "translation": "string (accurate English translation)",
       "guidance": ["string", "string"] (MANDATORY: minimum 2 items, in SAME language as input - regenerate if only 1),
       "fix": ["string", "string"] (MANDATORY: minimum 2 items, in SAME language as input, each must be FULL rewritten advertisement text - regenerate if only 1),
-      "risk_score": number (0-100)
+      "risk_score": number (0-100),
+      "validationSources": {
+        "regulatory": "string (specific regulation section like ASCI Code Chapter IV.1.4)",
+        "confidenceLevel": "high" | "medium" | "low"
+      }
     }
   ]
 }
@@ -308,7 +312,7 @@ export const performAudit = async (content, scanType = 'advanced', contentType =
     console.log(`[AI Audit] Starting ${scanType} audit for ${contentType} content`);
     
     const vertexAI = getVertexAIClient();
-    const modelName = getModelForScanType(scanType);
+    const modelName = selectGeminiModel(contentType, content.length, false).model;
     const generationConfig = getGenerationConfig(scanType);
     
     const model = vertexAI.getGenerativeModel({
@@ -394,6 +398,22 @@ export const performAudit = async (content, scanType = 'advanced', contentType =
         }
       }
       
+      // FIX 4: Add validationSources with fallback
+      if (!violation.validationSources) {
+        violation.validationSources = {
+          regulatory: violation.regulation || 'General Compliance Principle',
+          confidenceLevel: 'medium'
+        };
+      } else {
+        // Ensure required fields exist
+        if (!violation.validationSources.regulatory) {
+          violation.validationSources.regulatory = violation.regulation || 'General Compliance Principle';
+        }
+        if (!violation.validationSources.confidenceLevel) {
+          violation.validationSources.confidenceLevel = 'medium';
+        }
+      }
+      
       return violation;
     });
     
@@ -425,7 +445,7 @@ export const performMultimodalAudit = async (imageBuffer, mimetype, scanType = '
     console.log(`[AI Audit] Starting multimodal audit for image`);
     
     const vertexAI = getVertexAIClient();
-    const modelName = getModelForScanType(scanType);
+    const modelName = selectGeminiModel('image', 0, false).model;
     const generationConfig = getGenerationConfig(scanType);
     
     const model = vertexAI.getGenerativeModel({
@@ -492,6 +512,22 @@ export const performMultimodalAudit = async (imageBuffer, mimetype, scanType = '
         while (violation.fix.length < 2) {
           // Fallback: Generic compliant advertisement text (AI should provide full rewrites)
           violation.fix.push('[Full compliant rewritten advertisement text required - replace with regulation-based rewrite]');
+        }
+      }
+      
+      // FIX 4: Add validationSources with fallback
+      if (!violation.validationSources) {
+        violation.validationSources = {
+          regulatory: violation.regulation || 'General Compliance Principle',
+          confidenceLevel: 'medium'
+        };
+      } else {
+        // Ensure required fields exist
+        if (!violation.validationSources.regulatory) {
+          violation.validationSources.regulatory = violation.regulation || 'General Compliance Principle';
+        }
+        if (!violation.validationSources.confidenceLevel) {
+          violation.validationSources.confidenceLevel = 'medium';
         }
       }
       
