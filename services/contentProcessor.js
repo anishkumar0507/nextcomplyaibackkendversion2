@@ -553,6 +553,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
   const extractionPlan = ['jina_reader', 'mercury', 'puppeteer'];
   let lastError;
   const attemptedMethods = [];
+  let botProtectionDetected = false;
 
   for (const method of extractionPlan) {
     let extractedText, extractionMethod, auditInputResult;
@@ -561,8 +562,16 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       attemptedMethods.push(method);
       console.log(`[Extraction Pipeline] Attempting method ${attemptedMethods.length}/${extractionPlan.length}: ${method}`);
       
-      // STEP 1: Extract content (this is what we retry on failure)
-      ({ extractedText, extractionMethod } = await extractBlogContentByMethod(url, method));
+      // STEP 1: Extract content with bot protection handling
+      let extractionOptions = {};
+      
+      // If bot protection was detected in a previous step and this is puppeteer, use enhanced settings
+      if (botProtectionDetected && method === 'puppeteer') {
+        console.log('[Extraction Pipeline] Previous method detected bot protection - using enhanced Puppeteer settings');
+        extractionOptions.retryWithEnhancedSettings = true;
+      }
+      
+      ({ extractedText, extractionMethod } = await extractBlogContentByMethod(url, method, extractionOptions));
       console.log('[Pipeline] Scraping completed', JSON.stringify({ method: extractionMethod, length: extractedText.length }));
 
       if (!extractedText || !extractedText.trim()) {
@@ -658,10 +667,54 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
         auditResult
       };
     } catch (error) {
-      // Only extraction errors should reach here
+      // Check if bot protection was detected
+      if (error.shouldRetryWithEnhancedPuppeteer) {
+        console.log(`[Extraction Pipeline] ${method} detected bot protection, will retry with enhanced Puppeteer`);
+        botProtectionDetected = true;
+        // Don't set lastError yet, continue to next method
+        continue;
+      }
+      
+      // Check if this is a final bot protection failure after enhanced retry
+      if (error.isFinalBotProtectionFailure) {
+        console.error('[Extraction Pipeline] ❌ Bot protection confirmed - cannot bypass even with enhanced Puppeteer');
+        
+        // Return structured bot protection error instead of throwing
+        return {
+          contentType: 'error',
+          originalInput: url,
+          error: 'BOT_PROTECTION_DETECTED',
+          message: 'The target website is protected by Cloudflare or bot detection and cannot be scraped automatically.',
+          status: 403,
+          metadata: {
+            timestamp: new Date().toISOString(),
+            attemptedMethods: attemptedMethods,
+            suggestion: 'Consider providing the content manually or checking if the website allows scraping in its robots.txt or terms of service.'
+          }
+        };
+      }
+      
+      // Regular extraction error
       lastError = error;
       console.warn('[Pipeline] Extraction attempt failed', JSON.stringify({ method, message: error.message }));
     }
+  }
+
+  // All extractors failed - check if it was due to bot protection
+  if (botProtectionDetected && attemptedMethods.includes('puppeteer')) {
+    console.error(`✗ [Extraction Failed] Bot protection persists across all methods`);
+    return {
+      contentType: 'error',
+      originalInput: url,
+      error: 'BOT_PROTECTION_DETECTED',
+      message: 'The target website is protected by Cloudflare or bot detection and cannot be scraped automatically.',
+      status: 403,
+      metadata: {
+        timestamp: new Date().toISOString(),
+        attemptedMethods: attemptedMethods,
+        suggestion: 'Consider providing the content manually or checking if the website allows scraping in its robots.txt or terms of service.'
+      }
+    };
   }
 
   // All extractors failed - return descriptive error

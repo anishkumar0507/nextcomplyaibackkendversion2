@@ -287,6 +287,14 @@ const fetchJinaReaderRawText = async (url) => {
     }
   });
 
+  // Detect Cloudflare/bot protection at HTTP level
+  if (response.status === 403) {
+    console.warn('[Jina Reader] HTTP 403 Forbidden - Likely Cloudflare protection');
+    const err = new Error(`Jina Reader returned HTTP 403 - Bot protection detected`);
+    err.isBotProtection = true;
+    throw err;
+  }
+
   if (!response.ok) {
     throw new Error(`Jina Reader HTTP ${response.status}`);
   }
@@ -315,8 +323,14 @@ const fetchMercuryRawText = async (url) => {
   return normalizeWhitespace(dom.window.document.body?.textContent || raw);
 };
 
-const fetchPuppeteerArticleText = async (url) => {
+const fetchPuppeteerArticleText = async (url, options = {}) => {
+  const isRetryAfterBotProtection = options.isRetryAfterBotProtection || false;
+  const waitUntilTimeout = options.waitUntilTimeout || REQUEST_TIMEOUT;
+  
   console.log('[Puppeteer + Stealth] Extracting article from:', url);
+  if (isRetryAfterBotProtection) {
+    console.log('[Puppeteer + Stealth] RETRYING with enhanced bot protection evasion settings');
+  }
   
   const { path: resolvedExecutablePath, isChromium } = await resolveExecutablePath();
   if (!resolvedExecutablePath) {
@@ -420,10 +434,20 @@ const fetchPuppeteerArticleText = async (url) => {
       );
     });
     
-    page.setDefaultNavigationTimeout(REQUEST_TIMEOUT);
-    console.log('[Puppeteer + Stealth] Navigating with enhanced stealth mode...');
+    const navigationTimeout = isRetryAfterBotProtection ? 45000 : REQUEST_TIMEOUT;
+    page.setDefaultNavigationTimeout(navigationTimeout);
+    console.log('[Puppeteer + Stealth] Navigating with enhanced stealth mode...', `(timeout: ${navigationTimeout}ms)`);
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: REQUEST_TIMEOUT });
+    // Enhanced settings for bot protection retry
+    let navigationOptions = { waitUntil: 'networkidle2', timeout: navigationTimeout };
+    
+    if (isRetryAfterBotProtection) {
+      // Add extra delay before navigation to appear more human-like
+      await sleep(2000);
+      navigationOptions = { waitUntil: 'networkidle2', timeout: 45000 };
+    }
+
+    await page.goto(url, navigationOptions);
     await page.waitForSelector('body', { timeout: 15000 });
     
     // Wait for main content selectors with better timeout handling
@@ -482,65 +506,121 @@ const fetchPuppeteerArticleText = async (url) => {
       throw new Error('Readability extracted empty content from page');
     }
 
+    // Check if we extracted a bot protection page
+    if (isBotProtectionPage(extractedText)) {
+      const err = new Error('Puppeteer extracted bot protection page');
+      err.isBotProtection = true;
+      throw err;
+    }
+
     return extractedText;
   } finally {
     await browser.close().catch(() => {});
   }
 };
 
-export const extractBlogContentByMethod = async (url, method) => {
+/**
+ * Create a structured bot protection error response
+ */
+const createBotProtectionError = (message = 'Bot protection detected') => {
+  return {
+    error: 'BOT_PROTECTION_DETECTED',
+    message: message || 'The target website is protected by Cloudflare or bot detection and cannot be scraped automatically.',
+    status: 403,
+    metadata: {
+      timestamp: new Date().toISOString(),
+      suggestion: 'Consider providing the content manually or checking if the website allows scraping.'
+    }
+  };
+};
+
+export const extractBlogContentByMethod = async (url, method, options = {}) => {
   if (method === 'jina_reader') {
-    const text = await fetchJinaReaderRawText(url);
-    if (!text.trim()) throw new Error('Jina Reader returned empty content');
-    
-    // Validate content is not bot protection page
-    if (isBotProtectionPage(text)) {
-      throw new Error('Jina Reader extracted bot protection page');
+    try {
+      const text = await fetchJinaReaderRawText(url);
+      if (!text.trim()) throw new Error('Jina Reader returned empty content');
+      
+      // Validate content is not bot protection page
+      if (isBotProtectionPage(text)) {
+        throw new Error('Jina Reader extracted bot protection page');
+      }
+      
+      // Validate content length
+      if (!isContentLengthValid(text)) {
+        throw new Error(`Jina Reader content too short: ${text.trim().length} chars`);
+      }
+      
+      console.log(`[Jina Reader] Successfully extracted ${text.length} chars`);
+      return { extractedText: text, extractionMethod: method };
+    } catch (error) {
+      // If Jina Reader hit bot protection, signal for enhanced Puppeteer retry
+      if (error.isBotProtection) {
+        console.log('[Jina Reader] Bot protection detected - will trigger enhanced Puppeteer retry');
+        error.shouldRetryWithEnhancedPuppeteer = true;
+      }
+      throw error;
     }
-    
-    // Validate content length
-    if (!isContentLengthValid(text)) {
-      throw new Error(`Jina Reader content too short: ${text.trim().length} chars`);
-    }
-    
-    console.log(`[Jina Reader] Successfully extracted ${text.length} chars`);
-    return { extractedText: text, extractionMethod: method };
   }
 
   if (method === 'mercury') {
-    const text = await fetchMercuryRawText(url);
-    if (!text.trim()) throw new Error('Mercury Parser returned empty content');
-    
-    // Validate content is not bot protection page
-    if (isBotProtectionPage(text)) {
-      throw new Error('Mercury Parser extracted bot protection page');
+    try {
+      const text = await fetchMercuryRawText(url);
+      if (!text.trim()) throw new Error('Mercury Parser returned empty content');
+      
+      // Validate content is not bot protection page
+      if (isBotProtectionPage(text)) {
+        throw new Error('Mercury Parser extracted bot protection page');
+      }
+      
+      // Validate content length
+      if (!isContentLengthValid(text)) {
+        throw new Error(`Mercury Parser content too short: ${text.trim().length} chars`);
+      }
+      
+      console.log(`[Mercury Parser] Successfully extracted ${text.length} chars`);
+      return { extractedText: text, extractionMethod: method };
+    } catch (error) {
+      // If Mercury hit bot protection, signal for enhanced Puppeteer retry
+      if (error.isBotProtection) {
+        console.log('[Mercury Parser] Bot protection detected - will trigger enhanced Puppeteer retry');
+        error.shouldRetryWithEnhancedPuppeteer = true;
+      }
+      throw error;
     }
-    
-    // Validate content length
-    if (!isContentLengthValid(text)) {
-      throw new Error(`Mercury Parser content too short: ${text.trim().length} chars`);
-    }
-    
-    console.log(`[Mercury Parser] Successfully extracted ${text.length} chars`);
-    return { extractedText: text, extractionMethod: method };
   }
 
   if (method === 'puppeteer') {
-    const text = await fetchPuppeteerArticleText(url);
-    if (!text.trim()) throw new Error('Puppeteer returned empty content');
-    
-    // Validate content is not bot protection page
-    if (isBotProtectionPage(text)) {
-      throw new Error('Puppeteer extracted bot protection page');
+    try {
+      // Check if this is a retry after bot protection was detected
+      const retryWithEnhancedSettings = options.retryWithEnhancedSettings || false;
+      const text = await fetchPuppeteerArticleText(url, { 
+        isRetryAfterBotProtection: retryWithEnhancedSettings 
+      });
+      
+      if (!text.trim()) throw new Error('Puppeteer returned empty content');
+      
+      // Validate content is not bot protection page
+      if (isBotProtectionPage(text)) {
+        const err = new Error('Puppeteer extracted bot protection page');
+        err.isBotProtection = true;
+        throw err;
+      }
+      
+      // Validate content length
+      if (!isContentLengthValid(text)) {
+        throw new Error(`Puppeteer content too short: ${text.trim().length} chars`);
+      }
+      
+      console.log(`[Puppeteer + Readability] Successfully extracted ${text.length} chars`);
+      return { extractedText: text, extractionMethod: method };
+    } catch (error) {
+      // If this was already a retry and still failed, mark as final bot protection failure
+      if (options.retryWithEnhancedSettings && error.isBotProtection) {
+        console.error('[Puppeteer] Bot protection persists even after enhanced retry');
+        error.isFinalBotProtectionFailure = true;
+      }
+      throw error;
     }
-    
-    // Validate content length
-    if (!isContentLengthValid(text)) {
-      throw new Error(`Puppeteer content too short: ${text.trim().length} chars`);
-    }
-    
-    console.log(`[Puppeteer + Readability] Successfully extracted ${text.length} chars`);
-    return { extractedText: text, extractionMethod: method };
   }
 
   throw new Error(`Unsupported extraction method: ${method}`);

@@ -47,6 +47,12 @@ export const createAudit = async (req, res) => {
       region
     });
 
+    // Check if this is a bot protection error
+    if (auditResult.contentType === 'error' && auditResult.error === 'BOT_PROTECTION_DETECTED') {
+      console.warn('[Audit Controller] Bot protection detected for URL:', url);
+      return res.status(403).json(auditResult);
+    }
+
     return res.status(201).json(auditResult);
   } catch (error) {
     console.error('[Audit Controller] Error:', error);
