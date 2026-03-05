@@ -565,10 +565,18 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       // STEP 1: Extract content with bot protection handling
       let extractionOptions = {};
       
-      // If bot protection was detected in a previous step and this is puppeteer, use enhanced settings
+      // If bot protection was detected in a previous step and this is puppeteer, use enhanced settings + proxy
       if (botProtectionDetected && method === 'puppeteer') {
         console.log('[Extraction Pipeline] Previous method detected bot protection - using enhanced Puppeteer settings');
         extractionOptions.retryWithEnhancedSettings = true;
+        
+        // Enable proxy if configured
+        if (process.env.PROXY_URL) {
+          console.log('[Scraper] Retrying with proxy...');
+          extractionOptions.useProxy = true;
+        } else {
+          console.warn('[Extraction Pipeline] PROXY_URL environment variable not set - proxy retry disabled');
+        }
       }
       
       ({ extractedText, extractionMethod } = await extractBlogContentByMethod(url, method, extractionOptions));

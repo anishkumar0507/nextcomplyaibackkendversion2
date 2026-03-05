@@ -326,10 +326,14 @@ const fetchMercuryRawText = async (url) => {
 const fetchPuppeteerArticleText = async (url, options = {}) => {
   const isRetryAfterBotProtection = options.isRetryAfterBotProtection || false;
   const waitUntilTimeout = options.waitUntilTimeout || REQUEST_TIMEOUT;
+  const useProxy = options.useProxy || false;
   
   console.log('[Puppeteer + Stealth] Extracting article from:', url);
   if (isRetryAfterBotProtection) {
     console.log('[Puppeteer + Stealth] RETRYING with enhanced bot protection evasion settings');
+  }
+  if (useProxy && process.env.PROXY_URL) {
+    console.log('[Scraper] Proxy enabled for Puppeteer:', process.env.PROXY_URL);
   }
   
   const { path: resolvedExecutablePath, isChromium } = await resolveExecutablePath();
@@ -368,6 +372,12 @@ const fetchPuppeteerArticleText = async (url, options = {}) => {
     '--disable-breakpad',
     '--user-agent=' + userAgent
   ];
+
+  // Add proxy support if enabled and available
+  if (useProxy && process.env.PROXY_URL) {
+    stealthArgs.push(`--proxy-server=${process.env.PROXY_URL}`);
+    console.log('[Scraper] Added proxy server to Puppeteer launch arguments');
+  }
 
   const browser = await puppeteer.launch({
     args: isChromium ? chromium.args : stealthArgs,
@@ -593,8 +603,11 @@ export const extractBlogContentByMethod = async (url, method, options = {}) => {
     try {
       // Check if this is a retry after bot protection was detected
       const retryWithEnhancedSettings = options.retryWithEnhancedSettings || false;
+      const useProxy = options.useProxy || false;
+      
       const text = await fetchPuppeteerArticleText(url, { 
-        isRetryAfterBotProtection: retryWithEnhancedSettings 
+        isRetryAfterBotProtection: retryWithEnhancedSettings,
+        useProxy: useProxy
       });
       
       if (!text.trim()) throw new Error('Puppeteer returned empty content');
