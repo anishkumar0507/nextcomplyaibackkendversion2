@@ -550,33 +550,44 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
     });
   }
 
-  const extractionPlan = ['jina_reader', 'mercury', 'puppeteer', 'zenrows'];
+  const extractionPlan = [];
+  if (process.env.ZENROWS_API_KEY) {
+    extractionPlan.push({ method: 'zenrows', logMethod: 'zenrows' });
+  }
+  extractionPlan.push(
+    { method: 'puppeteer', logMethod: 'puppeteer_proxy' },
+    { method: 'jina_reader', logMethod: 'jina_reader' },
+    { method: 'mercury', logMethod: 'mercury' }
+  );
   let lastError;
   const attemptedMethods = [];
   let botProtectionDetected = false;
 
-  for (const method of extractionPlan) {
+  for (const planEntry of extractionPlan) {
+    const { method, logMethod } = planEntry;
     let extractedText, extractionMethod, auditInputResult;
     
     try {
-      attemptedMethods.push(method);
-      console.log(`[Extraction Pipeline] Attempting method ${attemptedMethods.length}/${extractionPlan.length}: ${method}`);
+      attemptedMethods.push(logMethod);
+      console.log(`[Extraction Pipeline] Attempting method ${attemptedMethods.length}/${extractionPlan.length}: ${logMethod}`);
       
       // STEP 1: Extract content with bot protection handling
       let extractionOptions = {};
       
-      // If bot protection was detected in a previous step and this is puppeteer, use enhanced settings + proxy
-      if (botProtectionDetected && method === 'puppeteer') {
-        console.log('[Extraction Pipeline] Previous method detected bot protection - using enhanced Puppeteer settings');
+      if (logMethod === 'puppeteer_proxy') {
         extractionOptions.retryWithEnhancedSettings = true;
-        
-        // Enable proxy if configured
         if (process.env.PROXY_URL) {
           console.log('[Scraper] Retrying with proxy...');
           extractionOptions.useProxy = true;
         } else {
           console.warn('[Extraction Pipeline] PROXY_URL environment variable not set - proxy retry disabled');
         }
+      }
+
+      // If bot protection was detected in a previous step and this is puppeteer, keep enhanced settings enabled
+      if (botProtectionDetected && method === 'puppeteer') {
+        console.log('[Extraction Pipeline] Previous method detected bot protection - using enhanced Puppeteer settings');
+        extractionOptions.retryWithEnhancedSettings = true;
       }
       
       ({ extractedText, extractionMethod } = await extractBlogContentByMethod(url, method, extractionOptions));
@@ -677,7 +688,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
     } catch (error) {
       // Check if bot protection was detected
       if (error.shouldRetryWithEnhancedPuppeteer) {
-        console.log(`[Extraction Pipeline] ${method} detected bot protection, will retry with enhanced Puppeteer`);
+        console.log(`[Extraction Pipeline] ${logMethod} detected bot protection, will retry with enhanced Puppeteer`);
         botProtectionDetected = true;
         // Don't set lastError yet, continue to next method
         continue;
@@ -704,12 +715,12 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       
       // Regular extraction error
       lastError = error;
-      console.warn('[Pipeline] Extraction attempt failed', JSON.stringify({ method, message: error.message }));
+      console.warn('[Pipeline] Extraction attempt failed', JSON.stringify({ method: logMethod, message: error.message }));
     }
   }
 
   // All extractors failed - check if it was due to bot protection
-  if (botProtectionDetected && attemptedMethods.includes('puppeteer')) {
+  if (botProtectionDetected && attemptedMethods.some((attempt) => attempt === 'puppeteer' || attempt === 'puppeteer_proxy')) {
     console.error(`✗ [Extraction Failed] Bot protection persists across all methods`);
     return {
       contentType: 'error',
