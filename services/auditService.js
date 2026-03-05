@@ -1,6 +1,7 @@
 import { VertexAI } from '@google-cloud/vertexai';
 import { selectGeminiModel, getFallbackModel, getGenerationConfig, isComplexContent } from './modelRouter.js';
 import { extractClaims, shouldExtractClaims } from './claimsExtractor.js';
+import { validateViolations, validateAuditResponse } from './violationValidator.js';
 
 /**
  * Audit Service
@@ -432,6 +433,21 @@ const normalizeResponse = (parsed) => {
     
     return violation;
   });
+
+  // VALIDATION LAYER: Enrich violations with authoritative regulation references
+  try {
+    console.log('[Audit Service] Running violation validation layer...');
+    const validatedViolations = validateViolations(parsed.violations, {
+      jurisdiction: 'India',
+      mapToRegulation: true,
+      addConfidenceScore: true
+    });
+    parsed.violations = validatedViolations;
+    console.log(`[Audit Service] ✓ Violations enriched with authoritative references (${validatedViolations.length} violations)`);
+  } catch (error) {
+    console.warn('[Audit Service] Validation layer error (continuing without enrichment):', error.message);
+    // Continue without validation if it fails - ensure backward compatibility
+  }
   
   return parsed;
 };

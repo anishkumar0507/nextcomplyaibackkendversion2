@@ -558,6 +558,12 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       const { extractedText, extractionMethod } = await extractBlogContentByMethod(url, method);
       console.log('[Pipeline] Scraping completed', JSON.stringify({ method: extractionMethod, length: extractedText.length }));
 
+      if (!extractedText || !extractedText.trim()) {
+        console.warn('[Pipeline] Extraction failed: empty content', JSON.stringify({ method: extractionMethod }));
+        lastError = new Error('extraction_failed_completely');
+        continue;
+      }
+
       const auditInputResult = await buildAuditInput({
         rawContent: extractedText,
         sourceType: 'blog',
@@ -570,16 +576,22 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       }
 
       if (!auditInputResult.validationResult.isValid) {
-        console.warn('[Pipeline] Content validation failed', JSON.stringify({ reasons: auditInputResult.validationResult.reasons }));
-        lastError = new Error(`Content validation failed: ${auditInputResult.validationResult.reasons.join(', ')}`);
+        const reasons = auditInputResult.validationResult.reasons || [];
+        if (reasons.includes('content_too_short')) {
+          console.warn('[Pipeline] Content validation warning: short content', JSON.stringify({ reasons }));
+          console.warn('[Pipeline] Continuing audit despite short content');
+        } else {
+          console.warn('[Pipeline] Content validation warning: continuing audit', JSON.stringify({ reasons }));
+        }
+      }
+
+      if (!auditInputResult.cleanedContent || !auditInputResult.cleanedContent.trim()) {
+        console.warn('[Pipeline] Cleaned content empty, trying next extraction method', JSON.stringify({ method: extractionMethod }));
+        lastError = new Error('extraction_failed_completely');
         continue;
       }
 
-      if (auditInputResult.cleanedContent.length < 2000) {
-        console.warn('[Pipeline] Content too short after cleaning', JSON.stringify({ length: auditInputResult.cleanedContent.length }));
-        lastError = new Error('Content too short after cleaning');
-        continue;
-      }
+      const shortContentWarning = auditInputResult.cleanedContent.length < 200 ? 'short_content' : undefined;
 
       const auditResult = await analyzeWithGemini({
         content: auditInputResult.auditInput.textContent,
@@ -592,7 +604,10 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
         contentContext: 'Input is a written healthcare article, not a speech transcript.'
       });
 
-      auditResult.metadata = auditInputResult.auditInput.metadata;
+      auditResult.metadata = {
+        ...auditInputResult.auditInput.metadata,
+        ...(shortContentWarning ? { content_warning: shortContentWarning } : {})
+      };
 
       return {
         contentType: 'webpage',
