@@ -550,7 +550,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
     });
   }
 
-  const extractionPlan = ['jina_reader', 'mercury', 'puppeteer'];
+  const extractionPlan = ['jina_reader', 'mercury', 'puppeteer', 'zenrows'];
   let lastError;
   const attemptedMethods = [];
   let botProtectionDetected = false;

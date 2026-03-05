@@ -544,6 +544,73 @@ const createBotProtectionError = (message = 'Bot protection detected') => {
   };
 };
 
+/**
+ * Extract content using ZenRows API
+ * Uses JavaScript rendering and premium proxy to bypass Cloudflare and bot protection
+ * @param {string} url - URL to scrape
+ * @returns {Promise<string>} Extracted text content
+ */
+const fetchZenRowsArticleText = async (url) => {
+  const apiKey = process.env.ZENROWS_API_KEY;
+  
+  if (!apiKey) {
+    throw new Error('ZENROWS_API_KEY environment variable not set');
+  }
+
+  console.log('[ZenRows] Attempting extraction with ZenRows API...');
+  
+  try {
+    // ZenRows API with JavaScript rendering and premium proxy
+    const zenRowsUrl = `https://api.zenrows.com/v1/?url=${encodeURIComponent(url)}&apikey=${apiKey}&js_render=true&premium_proxy=true`;
+    
+    const response = await fetch(zenRowsUrl, {
+      headers: {
+        'User-Agent': getRandomUserAgent()
+      },
+      timeout: REQUEST_TIMEOUT
+    });
+
+    if (!response.ok) {
+      throw new Error(`ZenRows API returned HTTP ${response.status}`);
+    }
+
+    const html = await response.text();
+    
+    if (!html || html.trim().length === 0) {
+      throw new Error('ZenRows returned empty HTML');
+    }
+
+    // Extract text from HTML
+    const dom = new JSDOM(html, { url });
+    const reader = new Readability(dom.window.document);
+    const article = reader.parse();
+    
+    let extractedText = article?.textContent ?? '';
+    extractedText = normalizeWhitespace(extractedText);
+
+    if (!extractedText.trim()) {
+      // Fallback to direct text content extraction
+      extractedText = dom.window.document.body?.textContent || '';
+      extractedText = normalizeWhitespace(extractedText);
+    }
+
+    if (!extractedText.trim()) {
+      throw new Error('ZenRows: Could not extract text from HTML');
+    }
+
+    // Check if we extracted a bot protection page
+    if (isBotProtectionPage(extractedText)) {
+      throw new Error('ZenRows extracted bot protection page');
+    }
+
+    console.log(`[ZenRows] Successfully extracted ${extractedText.length} chars`);
+    return extractedText;
+  } catch (error) {
+    console.error('[ZenRows] Extraction failed:', error.message);
+    throw error;
+  }
+};
+
 export const extractBlogContentByMethod = async (url, method, options = {}) => {
   if (method === 'jina_reader') {
     try {
@@ -632,6 +699,31 @@ export const extractBlogContentByMethod = async (url, method, options = {}) => {
         console.error('[Puppeteer] Bot protection persists even after enhanced retry');
         error.isFinalBotProtectionFailure = true;
       }
+      throw error;
+    }
+  }
+
+  if (method === 'zenrows') {
+    try {
+      console.log('[Scraper] ZenRows fallback triggered');
+      const text = await fetchZenRowsArticleText(url);
+      
+      if (!text.trim()) throw new Error('ZenRows returned empty content');
+      
+      // Validate content is not bot protection page
+      if (isBotProtectionPage(text)) {
+        throw new Error('ZenRows extracted bot protection page');
+      }
+      
+      // Validate content length
+      if (!isContentLengthValid(text)) {
+        throw new Error(`ZenRows content too short: ${text.trim().length} chars`);
+      }
+      
+      console.log(`[Scraper] ZenRows extraction successful | Length: ${text.length} chars`);
+      return { extractedText: text, extractionMethod: method };
+    } catch (error) {
+      console.error('[ZenRows] Final attempt failed:', error.message);
       throw error;
     }
   }
