@@ -29,12 +29,70 @@ const USER_AGENTS = [
 ];
 const BOT_BLOCK_PATTERNS = [/captcha/i, /cloudflare/i, /access denied/i, /attention required/i, /verify you are human/i];
 
+// Bot protection detection patterns
+const BOT_PROTECTION_PHRASES = [
+  'verify you are not a bot',
+  'security verification',
+  'protect against malicious bots',
+  'cloudflare',
+  'checking your browser',
+  'just a moment',
+  'please verify you are a human',
+  'enable javascript and cookies',
+  'ddos protection',
+  'are you a robot',
+  'access denied',
+  'why have i been blocked',
+  'this request has been blocked'
+];
+
+const MIN_VALID_CONTENT_LENGTH = 500; // Minimum characters for valid content
+
 const delay = (minMs = 400, maxMs = 1200) => {
   const jitter = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
   return new Promise((resolve) => setTimeout(resolve, jitter));
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Detect if extracted content is a bot protection page
+ * @param {string} content - Extracted text content
+ * @returns {boolean} True if bot protection detected
+ */
+const isBotProtectionPage = (content) => {
+  if (!content || typeof content !== 'string') return false;
+  
+  const lowerContent = content.toLowerCase();
+  const matchedPhrases = BOT_PROTECTION_PHRASES.filter(phrase => 
+    lowerContent.includes(phrase.toLowerCase())
+  );
+  
+  if (matchedPhrases.length > 0) {
+    console.log('[Extraction] Bot protection detected. Matched phrases:', matchedPhrases);
+    return true;
+  }
+  
+  return false;
+};
+
+/**
+ * Validate extracted content length
+ * @param {string} content - Extracted text content
+ * @returns {boolean} True if content meets minimum length requirement
+ */
+const isContentLengthValid = (content) => {
+  if (!content || typeof content !== 'string') return false;
+  
+  const cleanedContent = content.trim();
+  const isValid = cleanedContent.length >= MIN_VALID_CONTENT_LENGTH;
+  
+  if (!isValid) {
+    console.log(`[Extraction] Content too short: ${cleanedContent.length} chars (minimum: ${MIN_VALID_CONTENT_LENGTH})`);
+  }
+  
+  return isValid;
+};
 
 const getRandomUserAgent = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 
@@ -258,7 +316,7 @@ const fetchMercuryRawText = async (url) => {
 };
 
 const fetchPuppeteerArticleText = async (url) => {
-  console.log('[Puppeteer + Readability] Extracting article from:', url);
+  console.log('[Puppeteer + Stealth] Extracting article from:', url);
   
   const { path: resolvedExecutablePath, isChromium } = await resolveExecutablePath();
   if (!resolvedExecutablePath) {
@@ -266,42 +324,165 @@ const fetchPuppeteerArticleText = async (url) => {
   }
 
   const userAgent = getRandomUserAgent();
+  
+  // Enhanced stealth arguments to evade Cloudflare and bot detection
+  const stealthArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--disable-gpu',
+    '--window-size=1366,768',
+    '--disable-web-security',
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--allow-running-insecure-content',
+    '--disable-infobars',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-extensions',
+    '--disable-sync',
+    '--disable-translate',
+    '--hide-scrollbars',
+    '--mute-audio',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--metrics-recording-only',
+    '--disable-default-apps',
+    '--no-zygote',
+    '--disable-breakpad',
+    '--user-agent=' + userAgent
+  ];
+
   const browser = await puppeteer.launch({
-    args: isChromium ? chromium.args : ['--no-sandbox', '--disable-setuid-sandbox'],
+    args: isChromium ? chromium.args : stealthArgs,
     executablePath: resolvedExecutablePath || undefined,
-    headless: isChromium ? chromium.headless : 'new'
+    headless: isChromium ? chromium.headless : 'new',
+    ignoreHTTPSErrors: true,
+    defaultViewport: null
   });
 
   try {
     const page = await browser.newPage();
+    
+    // Set realistic user agent
     await page.setUserAgent(userAgent);
+    
+    // Set realistic HTTP headers
     await page.setExtraHTTPHeaders({
       'Accept-Language': 'en-US,en;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1'
     });
-    await page.setViewport({ width: 1366, height: 768 });
+    
+    // Set realistic viewport with device scale factor
+    await page.setViewport({ 
+      width: 1366, 
+      height: 768,
+      deviceScaleFactor: 1,
+      hasTouch: false,
+      isLandscape: true,
+      isMobile: false
+    });
+    
+    // Additional stealth: override navigator properties that Cloudflare checks
+    await page.evaluateOnNewDocument(() => {
+      // Override the navigator.webdriver property
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => false
+      });
+      
+      // Override the navigator.plugins property to appear like a real browser
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5]
+      });
+      
+      // Override the navigator.languages property
+      Object.defineProperty(navigator, 'languages', {
+        get: () => ['en-US', 'en']
+      });
+      
+      // Add chrome object to window (common in real Chrome browsers)
+      window.chrome = {
+        runtime: {}
+      };
+      
+      // Override permissions API
+      const originalQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications' ?
+          Promise.resolve({ state: Notification.permission }) :
+          originalQuery(parameters)
+      );
+    });
+    
     page.setDefaultNavigationTimeout(REQUEST_TIMEOUT);
+    console.log('[Puppeteer + Stealth] Navigating with enhanced stealth mode...');
 
     await page.goto(url, { waitUntil: 'networkidle2', timeout: REQUEST_TIMEOUT });
     await page.waitForSelector('body', { timeout: 15000 });
-    await sleep(1200);
+    
+    // Wait for main content selectors with better timeout handling
+    const contentSelectors = ['article', 'main', '[role="main"]', '.content', '.article-content', '.post-content'];
+    let contentLoaded = false;
+    
+    for (const selector of contentSelectors) {
+      try {
+        await page.waitForSelector(selector, { timeout: 3000 });
+        console.log(`[Puppeteer] Found content selector: ${selector}`);
+        contentLoaded = true;
+        break;
+      } catch (e) {
+        // Continue to next selector
+      }
+    }
+    
+    if (contentLoaded) {
+      await sleep(1500); // Extra wait for dynamic content
+    } else {
+      await sleep(1200); // Fallback wait
+    }
 
     // Get full page HTML after rendering
     const pageHtml = await page.content();
 
-    // Use Mozilla Readability to extract main article content
-    const dom = new JSDOM(pageHtml, { url });
-    const reader = new Readability(dom.window.document);
-    const article = reader.parse();
+    // Try direct selector extraction first for better quality
+    let extractedText = '';
+    for (const selector of contentSelectors) {
+      try {
+        const element = await page.$(selector);
+        if (element) {
+          const text = await page.evaluate(el => el.textContent, element);
+          if (text && text.trim().length > MIN_VALID_CONTENT_LENGTH) {
+            extractedText = normalizeWhitespace(text);
+            console.log(`[Puppeteer] Extracted ${extractedText.length} chars from selector: ${selector}`);
+            break;
+          }
+        }
+      } catch (e) {
+        // Continue to next selector
+      }
+    }
 
-    // Extract text from Readability article
-    const rawText = article?.textContent ?? '';
+    // Fallback to Readability if direct extraction didn't work
+    if (!extractedText || extractedText.trim().length < MIN_VALID_CONTENT_LENGTH) {
+      console.log('[Puppeteer] Falling back to Readability parser');
+      const dom = new JSDOM(pageHtml, { url });
+      const reader = new Readability(dom.window.document);
+      const article = reader.parse();
+      extractedText = article?.textContent ?? '';
+      extractedText = normalizeWhitespace(extractedText);
+    }
     
-    if (!rawText.trim()) {
+    if (!extractedText.trim()) {
       throw new Error('Readability extracted empty content from page');
     }
 
-    return normalizeWhitespace(rawText);
+    return extractedText;
   } finally {
     await browser.close().catch(() => {});
   }
@@ -311,18 +492,54 @@ export const extractBlogContentByMethod = async (url, method) => {
   if (method === 'jina_reader') {
     const text = await fetchJinaReaderRawText(url);
     if (!text.trim()) throw new Error('Jina Reader returned empty content');
+    
+    // Validate content is not bot protection page
+    if (isBotProtectionPage(text)) {
+      throw new Error('Jina Reader extracted bot protection page');
+    }
+    
+    // Validate content length
+    if (!isContentLengthValid(text)) {
+      throw new Error(`Jina Reader content too short: ${text.trim().length} chars`);
+    }
+    
+    console.log(`[Jina Reader] Successfully extracted ${text.length} chars`);
     return { extractedText: text, extractionMethod: method };
   }
 
   if (method === 'mercury') {
     const text = await fetchMercuryRawText(url);
     if (!text.trim()) throw new Error('Mercury Parser returned empty content');
+    
+    // Validate content is not bot protection page
+    if (isBotProtectionPage(text)) {
+      throw new Error('Mercury Parser extracted bot protection page');
+    }
+    
+    // Validate content length
+    if (!isContentLengthValid(text)) {
+      throw new Error(`Mercury Parser content too short: ${text.trim().length} chars`);
+    }
+    
+    console.log(`[Mercury Parser] Successfully extracted ${text.length} chars`);
     return { extractedText: text, extractionMethod: method };
   }
 
   if (method === 'puppeteer') {
     const text = await fetchPuppeteerArticleText(url);
     if (!text.trim()) throw new Error('Puppeteer returned empty content');
+    
+    // Validate content is not bot protection page
+    if (isBotProtectionPage(text)) {
+      throw new Error('Puppeteer extracted bot protection page');
+    }
+    
+    // Validate content length
+    if (!isContentLengthValid(text)) {
+      throw new Error(`Puppeteer content too short: ${text.trim().length} chars`);
+    }
+    
+    console.log(`[Puppeteer + Readability] Successfully extracted ${text.length} chars`);
     return { extractedText: text, extractionMethod: method };
   }
 

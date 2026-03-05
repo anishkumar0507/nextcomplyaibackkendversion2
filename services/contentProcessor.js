@@ -552,9 +552,13 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
 
   const extractionPlan = ['jina_reader', 'mercury', 'puppeteer'];
   let lastError;
+  const attemptedMethods = [];
 
   for (const method of extractionPlan) {
     try {
+      attemptedMethods.push(method);
+      console.log(`[Extraction Pipeline] Attempting method ${attemptedMethods.length}/${extractionPlan.length}: ${method}`);
+      
       const { extractedText, extractionMethod } = await extractBlogContentByMethod(url, method);
       console.log('[Pipeline] Scraping completed', JSON.stringify({ method: extractionMethod, length: extractedText.length }));
 
@@ -593,6 +597,9 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
 
       const shortContentWarning = auditInputResult.cleanedContent.length < 200 ? 'short_content' : undefined;
 
+      // Log successful extraction
+      console.log(`✓ [Extraction Success] Method: ${extractionMethod.toUpperCase()} | Length: ${auditInputResult.cleanedContent.length} chars | Attempted: ${attemptedMethods.join(', ')}`);
+
       const auditResult = await analyzeWithGemini({
         content: auditInputResult.auditInput.textContent,
         inputType: 'article',
@@ -606,6 +613,8 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
 
       auditResult.metadata = {
         ...auditInputResult.auditInput.metadata,
+        extractionMethod: extractionMethod,
+        attemptedMethods: attemptedMethods,
         ...(shortContentWarning ? { content_warning: shortContentWarning } : {})
       };
 
@@ -622,7 +631,10 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
     }
   }
 
-  throw new Error(`Blog content extraction failed: ${lastError?.message || 'Unknown error'}`);
+  // All extractors failed - return descriptive error
+  const errorMessage = `All extraction methods failed for URL: ${url}. Attempted: ${attemptedMethods.join(', ')}. Last error: ${lastError?.message || 'Unknown error'}. The content may be protected by bot detection (Cloudflare, CAPTCHA) or require authentication.`;
+  console.error(`✗ [Extraction Failed] ${errorMessage}`);
+  throw new Error(errorMessage);
 };
 
 const processDocumentBuffer = async ({ buffer, mimetype, originalInput, category, analysisMode, country, region, rules }) => {
