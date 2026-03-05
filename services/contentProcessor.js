@@ -555,11 +555,14 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
   const attemptedMethods = [];
 
   for (const method of extractionPlan) {
+    let extractedText, extractionMethod, auditInputResult;
+    
     try {
       attemptedMethods.push(method);
       console.log(`[Extraction Pipeline] Attempting method ${attemptedMethods.length}/${extractionPlan.length}: ${method}`);
       
-      const { extractedText, extractionMethod } = await extractBlogContentByMethod(url, method);
+      // STEP 1: Extract content (this is what we retry on failure)
+      ({ extractedText, extractionMethod } = await extractBlogContentByMethod(url, method));
       console.log('[Pipeline] Scraping completed', JSON.stringify({ method: extractionMethod, length: extractedText.length }));
 
       if (!extractedText || !extractedText.trim()) {
@@ -568,7 +571,8 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
         continue;
       }
 
-      const auditInputResult = await buildAuditInput({
+      // STEP 2: Build audit input
+      auditInputResult = await buildAuditInput({
         rawContent: extractedText,
         sourceType: 'blog',
         contentFormat: 'article',
@@ -597,21 +601,49 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
 
       const shortContentWarning = auditInputResult.cleanedContent.length < 200 ? 'short_content' : undefined;
 
-      // Log successful extraction
+      // Log successful extraction - EXTRACTION SUCCEEDED at this point
       console.log(`✓ [Extraction Success] Method: ${extractionMethod.toUpperCase()} | Length: ${auditInputResult.cleanedContent.length} chars | Attempted: ${attemptedMethods.join(', ')}`);
 
-      const auditResult = await analyzeWithGemini({
-        content: auditInputResult.auditInput.textContent,
-        inputType: 'article',
-        category,
-        analysisMode,
-        country,
-        region,
-        rules,
-        contentContext: 'Input is a written healthcare article, not a speech transcript.'
-      });
+      // STEP 3: Analyze with Gemini (separate error handling - parsing failure should NOT retry extraction)
+      let auditResult;
+      try {
+        auditResult = await analyzeWithGemini({
+          content: auditInputResult.auditInput.textContent,
+          inputType: 'article',
+          category,
+          analysisMode,
+          country,
+          region,
+          rules,
+          contentContext: 'Input is a written healthcare article, not a speech transcript.'
+        });
+      } catch (geminiError) {
+        console.error('[Pipeline] ⚠️ Gemini analysis failed but extraction succeeded:', geminiError.message);
+        console.log('[Pipeline] Returning extraction with fallback audit result');
+        
+        // Return a fallback audit result - extraction succeeded even if AI parsing failed
+        auditResult = {
+          score: 0,
+          status: 'Needs Review',
+          summary: 'Content extracted successfully but AI analysis encountered a parsing error. Please review manually or try again.',
+          financialPenalty: {
+            riskLevel: 'None',
+            description: 'Unable to assess due to analysis error'
+          },
+          ethicalMarketing: {
+            score: 0,
+            assessment: 'Unable to assess due to analysis error'
+          },
+          violations: [],
+          metadata: {
+            parsingError: true,
+            errorMessage: geminiError.message
+          }
+        };
+      }
 
       auditResult.metadata = {
+        ...auditResult.metadata,
         ...auditInputResult.auditInput.metadata,
         extractionMethod: extractionMethod,
         attemptedMethods: attemptedMethods,
@@ -626,6 +658,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
         auditResult
       };
     } catch (error) {
+      // Only extraction errors should reach here
       lastError = error;
       console.warn('[Pipeline] Extraction attempt failed', JSON.stringify({ method, message: error.message }));
     }

@@ -5,6 +5,9 @@ import { VertexAI } from "@google-cloud/vertexai";
 ================================ */
 const MODEL_NAME = "gemini-2.5-flash";
 
+/**
+ * Clean JSON string by removing markdown formatting
+ */
 const cleanJsonString = (text = "") => {
   return text
     .replace(/```json/gi, "")
@@ -12,7 +15,18 @@ const cleanJsonString = (text = "") => {
     .trim();
 };
 
+/**
+ * Extract JSON object using regex pattern
+ * Captures the first complete JSON object from text
+ */
 const extractJsonCandidate = (text = "") => {
+  // First try: Find first complete JSON object using regex
+  const jsonMatch = text.match(/{[\s\S]*}/);
+  if (jsonMatch) {
+    return jsonMatch[0].trim();
+  }
+  
+  // Fallback: Use indexOf/lastIndexOf
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) {
@@ -21,10 +35,69 @@ const extractJsonCandidate = (text = "") => {
   return text.slice(start, end + 1).trim();
 };
 
+/**
+ * Repair common JSON formatting issues
+ * - Remove trailing commas before closing brackets
+ * - Fix double commas
+ * - Remove invalid characters after closing brace
+ */
+const repairJsonString = (jsonStr) => {
+  let repaired = jsonStr
+    // Remove trailing commas before closing brackets/braces
+    .replace(/,\s*([}\]])/g, '$1')
+    // Fix double commas
+    .replace(/,,+/g, ',')
+    // Remove any content after the final closing brace
+    .replace(/(})\s*[^}]*$/, '$1')
+    // Normalize whitespace
+    .trim();
+  
+  return repaired;
+};
+
+/**
+ * Try to parse JSON with multiple fallback strategies
+ */
 const tryParseJson = (text) => {
   const cleaned = cleanJsonString(text);
   const candidate = extractJsonCandidate(cleaned);
-  return JSON.parse(candidate);
+  
+  // Attempt 1: Direct parse
+  try {
+    const parsed = JSON.parse(candidate);
+    console.log('[Gemini Parser] ✓ Extracted JSON successfully (direct parse)');
+    return parsed;
+  } catch (e) {
+    console.log('[Gemini Parser] Direct parse failed, attempting repair...');
+  }
+  
+  // Attempt 2: Repair and parse
+  try {
+    const repaired = repairJsonString(candidate);
+    const parsed = JSON.parse(repaired);
+    console.log('[Gemini Parser] ✓ JSON repaired and parsed successfully');
+    return parsed;
+  } catch (e) {
+    console.log('[Gemini Parser] Repair parse failed, using fallback extraction...');
+  }
+  
+  // Attempt 3: Extract only the content between first { and last }
+  try {
+    const firstBrace = candidate.indexOf('{');
+    const lastBrace = candidate.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      const extracted = candidate.substring(firstBrace, lastBrace + 1);
+      const repaired = repairJsonString(extracted);
+      const parsed = JSON.parse(repaired);
+      console.log('[Gemini Parser] ✓ Using fallback extraction and parsing');
+      return parsed;
+    }
+  } catch (e) {
+    console.log('[Gemini Parser] Fallback extraction failed');
+  }
+  
+  // All attempts failed
+  throw new Error('Failed to parse JSON after all repair attempts');
 };
 
 /* ===============================
@@ -69,7 +142,8 @@ Use ONLY the rules listed below to identify violations and generate fixes.
 ${rulesBlock}
 
 CRITICAL OUTPUT RULES:
-- Return ONLY valid JSON
+- Return ONLY valid JSON - NO explanations, NO markdown, NO extra text
+- Do NOT include transcription or full HTML content in response
 - Do NOT repeat points
 - Do NOT restart numbering
 - Each recommendation must be ACTIONABLE and REPLACEMENT-BASED
@@ -88,12 +162,11 @@ FORMAT RULES:
 - Max 3 points per field
 - If only 1 point exists, return ONLY "1."
 
-JSON SCHEMA:
+JSON SCHEMA (RETURN ONLY THIS STRUCTURE):
 {
   "score": number,
   "status": "Compliant" | "Needs Review" | "Non-Compliant",
   "summary": string,
-  "transcription": string,
   "financialPenalty": {
     "riskLevel": "High" | "Medium" | "Low" | "None",
     "description": string
@@ -118,7 +191,7 @@ JSON SCHEMA:
 ANALYSIS MODE: ${analysisMode || "Standard"}
 INDUSTRY DOMAIN: ${category || "General"}
 
-Return JSON only.`;
+IMPORTANT: Return ONLY the JSON object above. Do not include any other text.`;
 };
 
 /* ===============================
@@ -187,32 +260,50 @@ export const analyzeWithGemini = async ({
     result?.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
   if (!rawText) {
+    console.error('[Gemini Service] ❌ Empty response from Gemini');
     throw new Error("Gemini returned empty response");
   }
 
+  console.log('[Gemini Parser] Raw response length:', rawText.length, 'chars');
+
+  // Attempt to parse with multiple fallback strategies
   try {
-    return tryParseJson(rawText);
+    const parsed = tryParseJson(rawText);
+    console.log('[Gemini Parser] ✓ Successfully parsed Gemini response');
+    return parsed;
   } catch (err) {
-    console.error("❌ RAW GEMINI OUTPUT:\n", cleanJsonString(rawText));
+    console.warn('[Gemini Parser] ⚠️ Initial parsing failed:', err.message);
+    console.log('[Gemini Parser] Attempting Gemini-powered JSON repair...');
+    
+    // Log truncated raw output for debugging (first 500 chars)
+    const truncatedRaw = rawText.length > 500 ? rawText.substring(0, 500) + '...' : rawText;
+    console.log('[Gemini Parser] Raw output preview:', truncatedRaw);
 
-    // One repair attempt: ask Gemini to fix JSON only
-    const repairPrompt = `Fix and return ONLY valid JSON for this response. Do not add explanations.\n\nRAW RESPONSE:\n${rawText}`;
-    const repairResult = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: repairPrompt }] }],
-    });
-
-    const repairText =
-      repairResult?.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-    if (!repairText) {
-      throw new Error("Gemini returned incomplete or invalid JSON");
-    }
-
+    // Repair attempt: ask Gemini to fix JSON only
+    const repairPrompt = `The following response contains invalid JSON. Fix it and return ONLY a valid JSON object with no additional text, explanations, or markdown formatting.\n\nINVALID JSON:\n${rawText}\n\nReturn ONLY the corrected JSON object.`;
+    
     try {
-      return tryParseJson(repairText);
+      const repairResult = await model.generateContent({
+        contents: [{ role: "user", parts: [{ text: repairPrompt }] }],
+      });
+
+      const repairText =
+        repairResult?.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+      if (!repairText) {
+        console.error('[Gemini Parser] ❌ Repair attempt returned empty response');
+        throw new Error("Gemini JSON repair returned empty response");
+      }
+
+      console.log('[Gemini Parser] Repair response length:', repairText.length, 'chars');
+      
+      const parsed = tryParseJson(repairText);
+      console.log('[Gemini Parser] ✓ Successfully parsed repaired JSON');
+      return parsed;
     } catch (repairError) {
-      console.error("❌ RAW GEMINI REPAIR OUTPUT:\n", cleanJsonString(repairText));
-      throw new Error("Gemini returned incomplete or invalid JSON");
+      console.error('[Gemini Parser] ❌ JSON repair failed:', repairError.message);
+      
+      throw new Error(`Gemini returned unparseable JSON. Initial error: ${err.message}. Repair error: ${repairError.message}`);
     }
   }
 };
