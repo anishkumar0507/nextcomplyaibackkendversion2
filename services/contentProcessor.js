@@ -79,10 +79,17 @@ const performDeterministicAudit = async (text, opts = {}) => {
   // Step 1: Normalize content and generate hash
   const normalizedText = normalizeContent(text);
   const rulesVersion = 'v1';
-  const contentHash = generateAuditHash(normalizedText, rulesVersion);
+  let contentHash = null;
+  try {
+    contentHash = generateAuditHash(normalizedText, rulesVersion);
+  } catch (error) {
+    console.warn('[Audit Cache] Skipping cache because contentHash generation failed:', error.message);
+  }
   
   // Step 2: Check cache first
-  const cachedResult = await getCachedAudit(contentHash, rulesVersion);
+  const cachedResult = contentHash
+    ? await getCachedAudit(contentHash, rulesVersion)
+    : null;
   if (cachedResult) {
     console.log(`[Audit Validation] Using cached result for deterministic consistency`);
     return cachedResult;
@@ -161,6 +168,11 @@ const performDeterministicAudit = async (text, opts = {}) => {
   
   // Step 6: Store in cache
   const finalScore = finalResult.score || finalResult.complianceScore || 0;
+  if (!contentHash) {
+    console.warn('[Audit Cache] Skipping cache storage because contentHash is missing');
+    return finalResult;
+  }
+
   await storeCachedAudit(contentHash, normalizedText, finalResult, finalScore, rulesVersion);
   
   console.log(`[Audit Result] Stored in cache | Score: ${finalScore}`);

@@ -8,10 +8,14 @@ import mongoose from 'mongoose';
 const AuditCacheSchema = new mongoose.Schema({
   // Hash of normalized content + rules version
   // Used as primary lookup key
-  auditHash: {
+  contentHash: {
     type: String,
     required: true,
     unique: true,
+    index: true
+  },
+  auditHash: {
+    type: String,
     index: true
   },
 
@@ -67,7 +71,7 @@ const AuditCacheSchema = new mongoose.Schema({
 });
 
 // Create indices for efficient querying
-AuditCacheSchema.index({ auditHash: 1, rulesVersion: 1 });
+AuditCacheSchema.index({ contentHash: 1, rulesVersion: 1 });
 AuditCacheSchema.index({ createdAt: -1 });
 AuditCacheSchema.index({ lastAccessedAt: -1 });
 

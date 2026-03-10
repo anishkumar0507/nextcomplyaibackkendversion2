@@ -3,19 +3,24 @@ import AuditCache from '../models/AuditCache.js';
 /**
  * Check if audit result exists in cache
  * Returns cached result if found and updates access metadata
- * @param {string} auditHash - SHA256 hash of normalized content
+ * @param {string} contentHash - SHA256 hash of normalized content
  * @param {string} rulesVersion - Rules version to match
  * @returns {object|null} Cached audit result or null if not found
  */
-export const getCachedAudit = async (auditHash, rulesVersion = 'v1') => {
+export const getCachedAudit = async (contentHash, rulesVersion = 'v1') => {
   try {
+    if (!contentHash) {
+      console.warn('[Audit Cache] Skipping cache lookup because contentHash is missing');
+      return null;
+    }
+
     const cached = await AuditCache.findOne({ 
-      auditHash, 
+      $or: [{ contentHash }, { auditHash: contentHash }],
       rulesVersion 
     });
 
     if (cached) {
-      console.log(`[Audit Cache] HIT - Hash: ${auditHash.substring(0, 16)}... | Rules: ${rulesVersion}`);
+      console.log(`[Audit Cache] HIT - Hash: ${contentHash.substring(0, 16)}... | Rules: ${rulesVersion}`);
       
       // Update access metrics for analytics
       await AuditCache.updateOne(
@@ -29,7 +34,7 @@ export const getCachedAudit = async (auditHash, rulesVersion = 'v1') => {
       return cached.auditResult;
     }
 
-    console.log(`[Audit Cache] MISS - Hash: ${auditHash.substring(0, 16)}... | Rules: ${rulesVersion}`);
+    console.log(`[Audit Cache] MISS - Hash: ${contentHash.substring(0, 16)}... | Rules: ${rulesVersion}`);
     return null;
   } catch (error) {
     console.error('[Audit Cache] Error retrieving cached audit:', error.message);
@@ -40,34 +45,37 @@ export const getCachedAudit = async (auditHash, rulesVersion = 'v1') => {
 
 /**
  * Store audit result in cache
- * @param {string} auditHash - SHA256 hash of normalized content
+ * @param {string} contentHash - SHA256 hash of normalized content
  * @param {string} transcript - Normalized transcript/text that was audited
  * @param {object} auditResult - Full audit result from Gemini
  * @param {number} score - Compliance score
  * @param {string} rulesVersion - Rules version used
  * @returns {object} Stored cache record
  */
-export const storeCachedAudit = async (auditHash, transcript, auditResult, score, rulesVersion = 'v1') => {
+export const storeCachedAudit = async (contentHash, transcript, auditResult, score, rulesVersion = 'v1') => {
   try {
-    // Check if already exists (race condition safeguard)
-    const existing = await AuditCache.findOne({ auditHash, rulesVersion });
-    
-    if (existing) {
-      console.log(`[Audit Cache] Already cached - Hash: ${auditHash.substring(0, 16)}... | Rules: ${rulesVersion}`);
-      return existing;
+    if (!contentHash) {
+      console.warn('[Audit Cache] Skipping cache storage because contentHash is missing');
+      return null;
     }
 
-    const cached = await AuditCache.create({
-      auditHash,
-      transcript,
-      auditResult,
-      score,
-      rulesVersion,
-      createdAt: new Date()
-    });
+    await AuditCache.updateOne(
+      { contentHash },
+      {
+        contentHash,
+        auditHash: contentHash,
+        transcript,
+        auditResult,
+        score,
+        rulesVersion,
+        createdAt: new Date(),
+        lastAccessedAt: new Date()
+      },
+      { upsert: true }
+    );
 
-    console.log(`[Audit Cache] Stored - Hash: ${auditHash.substring(0, 16)}... | Score: ${score} | Rules: ${rulesVersion}`);
-    return cached;
+    console.log(`[Audit Cache] Stored - Hash: ${contentHash.substring(0, 16)}... | Score: ${score} | Rules: ${rulesVersion}`);
+    return true;
   } catch (error) {
     console.error('[Audit Cache] Error storing cached audit:', error.message);
     // Fail gracefully - don't break audit flow on cache write error
