@@ -135,11 +135,7 @@ export const notifyRuleUpdate = (updateData = {}) => {
 app.use(cors({
   origin: [
     'http://localhost:5173',
-    'http://localhost:3000',
-    'https://nextcomplyai.com',
-    'https://www.nextcomplyai.com',
-    'https://nextdoc.in',
-    'https://www.nextdoc.in'
+    'https://nextcomplaifrontend.vercel.app'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
