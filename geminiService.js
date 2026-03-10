@@ -230,8 +230,9 @@ export const analyzeWithGemini = async ({
   const model = vertexAI.getGenerativeModel({
     model: MODEL_NAME,
     generationConfig: {
-      temperature: 0,
-      topP: 1,
+      temperature: 0,           // Deterministic: always pick best token
+      topP: 0.8,               // Deterministic: only consider top 80% of tokens
+      topK: 1,                 // Deterministic: only pick from top 1 token (greedy)
       candidateCount: 1,
       maxOutputTokens: 8192,
     },

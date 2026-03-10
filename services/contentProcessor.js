@@ -13,6 +13,8 @@ import { getRulesForSelection } from './rulesService.js';
 import AuditRecord from '../models/AuditRecord.js';
 import { extractTextFromImage } from './ocrService.js';
 import { buildAuditInput } from './auditInputBuilder.ts';
+import { normalizeContent, generateAuditHash, calculateResultSimilarity } from '../utils/auditCache.utils.js';
+import { getCachedAudit, storeCachedAudit } from './auditCache.service.js';
 
 const MAX_TEXT_LENGTH = 100000;
 const MAX_MEDIA_SIZE = 100 * 1024 * 1024;
@@ -62,6 +64,107 @@ const calculateBenchmarkScore = (category, actualScore) => {
 const delay = (minMs = 300, maxMs = 900) => {
   const jitter = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
   return new Promise((resolve) => setTimeout(resolve, jitter));
+};
+
+/**
+ * Perform audit with deterministic caching and validation
+ * Checks cache first, validates result consistency, stores in cache
+ * @param {string} text - Text content to audit
+ * @param {object} opts - Audit options (category, analysisMode, country, region, rules)
+ * @returns {object} Audit result
+ */
+const performDeterministicAudit = async (text, opts = {}) => {
+  const { category, analysisMode, country, region, rules } = opts;
+  
+  // Step 1: Normalize content and generate hash
+  const normalizedText = normalizeContent(text);
+  const rulesVersion = 'v1';
+  const contentHash = generateAuditHash(normalizedText, rulesVersion);
+  
+  // Step 2: Check cache first
+  const cachedResult = await getCachedAudit(contentHash, rulesVersion);
+  if (cachedResult) {
+    console.log(`[Audit Validation] Using cached result for deterministic consistency`);
+    return cachedResult;
+  }
+  
+  // Step 3: Run initial audit
+  console.log(`[Audit Validation] Cache miss - running initial audit pass`);
+  const result1 = await analyzeWithGemini({
+    content: text,
+    inputType: 'text',
+    category,
+    analysisMode,
+    country,
+    region,
+    rules,
+    contentContext: ''
+  });
+  
+  // Step 4: Run validation audit
+  console.log(`[Audit Validation] Running validation pass for consistency check`);
+  await delay(500, 1000);
+  const result2 = await analyzeWithGemini({
+    content: text,
+    inputType: 'text',
+    category,
+    analysisMode,
+    country,
+    region,
+    rules,
+    contentContext: ''
+  });
+  
+  // Step 5: Compare results
+  const similarity = calculateResultSimilarity(result1, result2);
+  const score1 = result1.score || result1.complianceScore || 0;
+  const score2 = result2.score || result2.complianceScore || 0;
+  const scoreDiff = Math.abs(score1 - score2);
+  
+  console.log(`[Audit Validation] Similarity: ${similarity}% | Score Diff: ${scoreDiff} points`);
+  
+  let finalResult;
+  if (scoreDiff <= 3) {
+    // Results are stable - use first result
+    console.log(`[Audit Validation] Pass - Scores match closely, using result 1`);
+    finalResult = result1;
+  } else {
+    // Results differ significantly - run third audit and use majority
+    console.log(`[Audit Validation] Score diff (${scoreDiff}) exceeds threshold - running third pass`);
+    await delay(500, 1000);
+    const result3 = await analyzeWithGemini({
+      content: text,
+      inputType: 'text',
+      category,
+      analysisMode,
+      country,
+      region,
+      rules,
+      contentContext: ''
+    });
+    
+    const score3 = result3.score || result3.complianceScore || 0;
+    console.log(`[Audit Validation] Results: Pass1=${score1} | Pass2=${score2} | Pass3=${score3}`);
+    
+    // Use majority voting
+    const scores = [
+      { score: score1, result: result1 },
+      { score: score2, result: result2 },
+      { score: score3, result: result3 }
+    ];
+    scores.sort((a, b) => a.score - b.score);
+    
+    // Use middle score (not extreme)
+    finalResult = scores[1].result;
+    console.log(`[Audit Validation] Using majority result: Score=${scores[1].score}`);
+  }
+  
+  // Step 6: Store in cache
+  const finalScore = finalResult.score || finalResult.complianceScore || 0;
+  await storeCachedAudit(contentHash, normalizedText, finalResult, finalScore, rulesVersion);
+  
+  console.log(`[Audit Result] Stored in cache | Score: ${finalScore}`);
+  return finalResult;
 };
 
 let openaiClient = null;
@@ -397,9 +500,7 @@ const saveAuditRecord = async ({
 const processText = async ({ text, category, analysisMode, country, region, rules }) => {
   validateInputSize(text, 'text');
 
-  const auditResult = await analyzeWithGemini({
-    content: text,
-    inputType: 'text',
+  const auditResult = await performDeterministicAudit(text, {
     category,
     analysisMode,
     country,
@@ -422,9 +523,7 @@ const processMediaBuffer = async ({ buffer, mimetype, inputType, originalInput, 
   const transcriptText = transcriptionResult.transcript;
   console.log('[Transcript] Length:', transcriptText?.length);
 
-  const auditResult = await analyzeWithGemini({
-    content: transcriptText,
-    inputType,
+  const auditResult = await performDeterministicAudit(transcriptText, {
     category,
     analysisMode,
     country,
@@ -449,9 +548,7 @@ const processImageBuffer = async ({ buffer, originalInput, category, analysisMod
     throw new Error('Unable to extract readable text from image');
   }
 
-  const auditResult = await analyzeWithGemini({
-    content: extractedText,
-    inputType: 'image',
+  const auditResult = await performDeterministicAudit(extractedText, {
     category,
     analysisMode,
     country,
@@ -483,9 +580,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       transcriptText = await fetchYouTubeFallbackText(url, error.message);
     }
 
-    const auditResult = await analyzeWithGemini({
-      content: transcriptText,
-      inputType: 'video',
+    const auditResult = await performDeterministicAudit(transcriptText, {
       category,
       analysisMode,
       country,
@@ -530,9 +625,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
         extractedText = `Content could not be extracted due to access restrictions or timeouts. URL: ${url}. Please provide text or upload a file for review.`;
       }
 
-      const auditResult = await analyzeWithGemini({
-        content: extractedText,
-        inputType: 'url',
+      const auditResult = await performDeterministicAudit(extractedText, {
         category,
         analysisMode,
         country,
@@ -645,15 +738,12 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       // STEP 3: Analyze with Gemini (separate error handling - parsing failure should NOT retry extraction)
       let auditResult;
       try {
-        auditResult = await analyzeWithGemini({
-          content: auditInputResult.auditInput.textContent,
-          inputType: 'article',
+        auditResult = await performDeterministicAudit(auditInputResult.auditInput.textContent, {
           category,
           analysisMode,
           country,
           region,
-          rules,
-          contentContext: 'Input is a written healthcare article, not a speech transcript.'
+          rules
         });
       } catch (geminiError) {
         console.error('[Pipeline] ⚠️ Gemini analysis failed but extraction succeeded:', geminiError.message);
@@ -773,9 +863,7 @@ const processDocumentBuffer = async ({ buffer, mimetype, originalInput, category
 
   const auditText = scannedText || extractedText;
 
-  const auditResult = await analyzeWithGemini({
-    content: auditText,
-    inputType: 'document',
+  const auditResult = await performDeterministicAudit(auditText, {
     category,
     analysisMode,
     country,
