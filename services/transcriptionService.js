@@ -91,24 +91,6 @@ const getFileExtension = (mimetype) => {
   return 'mp3'; // Default fallback
 };
 
-const getFfmpegBinaryPath = (binaryName) => {
-  const configured = (process.env.FFMPEG_PATH || '').trim();
-
-  if (!configured) {
-    return binaryName;
-  }
-
-  if (configured.toLowerCase().endsWith('.exe')) {
-    const configuredName = path.basename(configured).toLowerCase();
-    if (configuredName === `${binaryName}.exe`) {
-      return configured;
-    }
-    return path.join(path.dirname(configured), `${binaryName}.exe`);
-  }
-
-  return path.join(configured, `${binaryName}.exe`);
-};
-
 const runProcess = (command, args, label) => {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true });
@@ -159,7 +141,7 @@ const transcribeDirectFile = async (filePath) => {
 };
 
 const splitIntoAudioChunks = async (filePath, outputDir) => {
-  const ffmpegPath = getFfmpegBinaryPath('ffmpeg');
+  const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
   const pattern = path.join(outputDir, 'chunk_%03d.mp3');
 
   await runProcess(

@@ -60,46 +60,19 @@ const normalizeUrl = (videoUrl: string): string => {
 
 const getYtDlpCommand = (): string => process.env.YTDL_PATH || 'yt-dlp';
 const getYtDlpJsRuntime = (): string => process.env.YTDL_JS_RUNTIME || 'node';
-const resolveFfmpegLocation = (): string => {
-  const rawPath = process.env.FFMPEG_PATH || '';
-  const normalized = rawPath.trim();
-  if (!normalized) return '';
-
-  if (normalized.toLowerCase().endsWith('ffmpeg.exe')) {
-    const dir = path.dirname(normalized);
-    const probePath = path.join(dir, 'ffprobe.exe');
-    if (fs.existsSync(normalized) && fs.existsSync(probePath)) {
-      return dir;
-    }
-    return '';
-  }
-
-  const probePath = path.join(normalized, 'ffprobe.exe');
-  if (fs.existsSync(probePath)) {
-    return normalized;
-  }
-
-  return '';
-};
-
-const ensureFfmpegAvailable = (): string => {
-  const ffmpegLocation = resolveFfmpegLocation();
-  if (!ffmpegLocation) {
-    throw new Error('FFMPEG_PATH is missing or ffprobe/ffmpeg not found. Required for MP3 re-encoding.');
-  }
-  return ffmpegLocation;
-};
+const getFfmpegPath = (): string => process.env.FFMPEG_PATH || 'ffmpeg';
+const getFfprobePath = (): string => process.env.FFPROBE_PATH || 'ffprobe';
 
 const downloadWithYtDlp = async (videoUrl: string, outputPath: string): Promise<void> => {
   console.log('[YouTube Transcript] Downloading audio with yt-dlp + FFmpeg MP3 re-encode...');
 
   await withTimeout(new Promise<void>((resolve, reject) => {
-    const ffmpegLocation = ensureFfmpegAvailable();
+    const ffmpegPath = getFfmpegPath();
     const args = [
       '--js-runtimes',
       getYtDlpJsRuntime(),
       '--ffmpeg-location',
-      ffmpegLocation,
+      ffmpegPath,
       '-x',
       '--audio-format',
       'mp3',
@@ -107,10 +80,6 @@ const downloadWithYtDlp = async (videoUrl: string, outputPath: string): Promise<
       outputPath,
       videoUrl
     ];
-
-    if (ffmpegLocation) {
-      args.unshift('--ffmpeg-location', ffmpegLocation);
-    }
 
     const process = spawn(getYtDlpCommand(), args);
 
@@ -136,8 +105,7 @@ const downloadWithYtDlp = async (videoUrl: string, outputPath: string): Promise<
 };
 
 const getAudioDurationSeconds = async (filePath: string): Promise<number> => {
-  const ffmpegLocation = ensureFfmpegAvailable();
-  const ffprobePath = path.join(ffmpegLocation, 'ffprobe.exe');
+  const ffprobePath = getFfprobePath();
 
   return await withTimeout(new Promise<number>((resolve, reject) => {
     const process = spawn(ffprobePath, [

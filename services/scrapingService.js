@@ -552,6 +552,8 @@ const createBotProtectionError = (message = 'Bot protection detected') => {
  */
 const fetchZenRowsArticleText = async (url) => {
   const apiKey = process.env.ZENROWS_API_KEY;
+  const targetUrl = url;
+  console.log('[ZenRows] API Key Present:', !!process.env.ZENROWS_API_KEY);
   
   if (!apiKey) {
     throw new Error('ZENROWS_API_KEY environment variable not set');
@@ -561,7 +563,7 @@ const fetchZenRowsArticleText = async (url) => {
   
   try {
     // ZenRows API with JavaScript rendering and premium proxy
-    const zenRowsUrl = `https://api.zenrows.com/v1/?url=${encodeURIComponent(url)}&apikey=${apiKey}&js_render=true&premium_proxy=true`;
+    const zenRowsUrl = `https://api.zenrows.com/v1/?apikey=${apiKey}&url=${encodeURIComponent(targetUrl)}&js_render=true&premium_proxy=true&antibot=true`;
     
     const response = await fetch(zenRowsUrl, {
       headers: {

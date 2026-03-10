@@ -62,48 +62,19 @@ const normalizeUrl = (videoUrl) => {
 
 const getYtDlpCommand = () => process.env.YTDL_PATH || 'yt-dlp';
 const getYtDlpJsRuntime = () => process.env.YTDL_JS_RUNTIME || 'node';
-const resolveFfmpegLocation = () => {
-  const rawPath = process.env.FFMPEG_PATH || '';
-  if (!rawPath) return '';
-
-  const normalized = rawPath.trim();
-  if (!normalized) return '';
-
-  if (normalized.toLowerCase().endsWith('ffmpeg.exe')) {
-    const dir = path.dirname(normalized);
-    const probePath = path.join(dir, 'ffprobe.exe');
-    if (fs.existsSync(normalized) && fs.existsSync(probePath)) {
-      return dir;
-    }
-    return '';
-  }
-
-  const probePath = path.join(normalized, 'ffprobe.exe');
-  if (fs.existsSync(probePath)) {
-    return normalized;
-  }
-
-  return '';
-};
-
-const ensureFfmpegAvailable = () => {
-  const ffmpegLocation = resolveFfmpegLocation();
-  if (!ffmpegLocation) {
-    throw new Error('FFMPEG_PATH is missing or ffprobe/ffmpeg not found. Required for MP3 re-encoding.');
-  }
-  return ffmpegLocation;
-};
+const getFfmpegPath = () => process.env.FFMPEG_PATH || 'ffmpeg';
+const getFfprobePath = () => process.env.FFPROBE_PATH || 'ffprobe';
 
 const downloadWithYtDlp = async (videoUrl, outputPath) => {
   console.log('[YouTube Transcript] Downloading audio with yt-dlp + FFmpeg MP3 re-encode...');
 
   await withTimeout(new Promise((resolve, reject) => {
-    const ffmpegLocation = ensureFfmpegAvailable();
+    const ffmpegPath = getFfmpegPath();
     const args = [
       '--js-runtimes',
       getYtDlpJsRuntime(),
       '--ffmpeg-location',
-      ffmpegLocation,
+      ffmpegPath,
       '-x',
       '--audio-format',
       'mp3',
@@ -136,8 +107,7 @@ const downloadWithYtDlp = async (videoUrl, outputPath) => {
 };
 
 const getAudioDurationSeconds = async (filePath) => {
-  const ffmpegLocation = ensureFfmpegAvailable();
-  const ffprobePath = path.join(ffmpegLocation, 'ffprobe.exe');
+  const ffprobePath = getFfprobePath();
 
   return await withTimeout(new Promise((resolve, reject) => {
     const process = spawn(ffprobePath, [
