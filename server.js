@@ -126,17 +126,20 @@ export const notifyRuleUpdate = (updateData = {}) => {
 // CORS Configuration - MUST be before routes
 app.use(cors({
   origin: [
+    'http://localhost:5173',
+    'http://localhost:3000',
     'https://nextcomplyai.com',
     'https://www.nextcomplyai.com',
-    'https://www.nextdoc.in',
     'https://nextdoc.in',
-    'http://localhost:3000',
-    'http://localhost:5173'
+    'https://www.nextdoc.in'
   ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
-  optionsSuccessStatus: 200
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Handle OPTIONS preflight requests for all routes
+app.options('*', cors());
 
 // Body parsing middleware
 app.use(express.json({ limit: '50mb' }));
