@@ -140,6 +140,33 @@ const transcribeDirectFile = async (filePath) => {
   return trimmed;
 };
 
+const transcribeSmartDetailed = async (filePath) => {
+  const stats = fs.statSync(filePath);
+  const sizeBytes = stats.size;
+
+  if (sizeBytes > MAX_MEDIA_SIZE) {
+    throw new Error(`File size (${(sizeBytes / 1024 / 1024).toFixed(2)}MB) exceeds ${MAX_MEDIA_SIZE / 1024 / 1024}MB limit`);
+  }
+
+  if (sizeBytes <= DIRECT_TRANSCRIBE_THRESHOLD) {
+    console.log('[Chunk] Direct mode');
+    const transcript = await transcribeDirectFile(filePath);
+    return {
+      transcript,
+      chunksProcessed: 1,
+      duration: null
+    };
+  }
+
+  console.log('[Chunk] Chunk mode');
+  const chunkedResult = await transcribeChunked(filePath);
+  return {
+    transcript: chunkedResult.transcript,
+    chunksProcessed: chunkedResult.chunksProcessed,
+    duration: null
+  };
+};
+
 const splitIntoAudioChunks = async (filePath, outputDir) => {
   const ffmpegPath = process.env.FFMPEG_PATH || 'ffmpeg';
   const pattern = path.join(outputDir, 'chunk_%03d.mp3');
@@ -186,7 +213,10 @@ const transcribeChunked = async (filePath) => {
       transcriptParts.push(part);
     }
 
-    return transcriptParts.join('\n').trim();
+    return {
+      transcript: transcriptParts.join('\n').trim(),
+      chunksProcessed: chunkFiles.length
+    };
   } finally {
     try {
       fs.rmSync(chunkDir, { recursive: true, force: true });
@@ -197,20 +227,8 @@ const transcribeChunked = async (filePath) => {
 };
 
 export const transcribeSmart = async (filePath) => {
-  const stats = fs.statSync(filePath);
-  const sizeBytes = stats.size;
-
-  if (sizeBytes > MAX_MEDIA_SIZE) {
-    throw new Error(`File size (${(sizeBytes / 1024 / 1024).toFixed(2)}MB) exceeds ${MAX_MEDIA_SIZE / 1024 / 1024}MB limit`);
-  }
-
-  if (sizeBytes <= DIRECT_TRANSCRIBE_THRESHOLD) {
-    console.log('[Chunk] Direct mode');
-    return await transcribeDirectFile(filePath);
-  }
-
-  console.log('[Chunk] Chunk mode');
-  return await transcribeChunked(filePath);
+  const result = await transcribeSmartDetailed(filePath);
+  return result.transcript;
 };
 
 /**
@@ -240,13 +258,17 @@ export const transcribe = async (audioBuffer, mimetype) => {
       // Write buffer to temporary file
       fs.writeFileSync(tempFilePath, audioBuffer);
       
-      const transcript = await transcribeSmart(tempFilePath);
+      const transcriptResult = await transcribeSmartDetailed(tempFilePath);
+      const transcriptText = transcriptResult.transcript.trim();
+      console.log('[Transcript] Length:', transcriptText?.length);
       
       const processingTime = Date.now() - startTime;
-      console.log(`[Transcription] Success | Model: ${MODEL} | Length: ${transcript.length} chars | Time: ${processingTime}ms`);
+      console.log(`[Transcription] Success | Model: ${MODEL} | Length: ${transcriptText.length} chars | Time: ${processingTime}ms`);
       
       return {
-        transcript: transcript.trim(),
+        transcript: transcriptText,
+        duration: transcriptResult.duration,
+        chunksProcessed: transcriptResult.chunksProcessed,
         model: MODEL,
         processingTime
       };

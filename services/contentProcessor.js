@@ -355,7 +355,10 @@ const normalizeGeminiResult = (result) => {
     score: normalizeScore(result.score),
     status: result.status || 'Needs Review',
     summary: result.summary || 'Summary unavailable.',
+    transcript: result.transcript || result.transcription || '',
     transcription: result.transcription || '',
+    extractedContent: result.extractedContent || result.content || result.transcript || result.transcription || '',
+    content: result.content || result.extractedContent || result.transcript || result.transcription || '',
     financialPenalty: result.financialPenalty || {
       riskLevel: 'Low',
       description: 'No financial risk assessment available.'
@@ -408,7 +411,8 @@ const processText = async ({ text, category, analysisMode, country, region, rule
     contentType: 'text',
     originalInput: text,
     extractedText: text,
-    transcript: '',
+    transcript: text,
+    extractedContent: text,
     auditResult
   };
 };
@@ -416,6 +420,7 @@ const processText = async ({ text, category, analysisMode, country, region, rule
 const processMediaBuffer = async ({ buffer, mimetype, inputType, originalInput, category, analysisMode, country, region, rules }) => {
   const transcriptionResult = await transcribe(buffer, mimetype);
   const transcriptText = transcriptionResult.transcript;
+  console.log('[Transcript] Length:', transcriptText?.length);
 
   const auditResult = await analyzeWithGemini({
     content: transcriptText,
@@ -432,6 +437,7 @@ const processMediaBuffer = async ({ buffer, mimetype, inputType, originalInput, 
     originalInput,
     extractedText: transcriptText,
     transcript: transcriptText,
+    extractedContent: transcriptText,
     auditResult
   };
 };
@@ -458,6 +464,7 @@ const processImageBuffer = async ({ buffer, originalInput, category, analysisMod
     originalInput,
     extractedText,
     transcript: extractedText,
+    extractedContent: extractedText,
     auditResult
   };
 };
@@ -491,6 +498,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       originalInput: url,
       extractedText: transcriptText,
       transcript: transcriptText,
+      extractedContent: transcriptText,
       auditResult
     };
   }
@@ -537,6 +545,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
         originalInput: url,
         extractedText,
         transcript: extractedText,
+        extractedContent: extractedText,
         auditResult
       };
     }
@@ -592,6 +601,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       
       ({ extractedText, extractionMethod } = await extractBlogContentByMethod(url, method, extractionOptions));
       console.log('[Pipeline] Scraping completed', JSON.stringify({ method: extractionMethod, length: extractedText.length }));
+      console.log('[Transcript] Length:', extractedText?.length);
 
       if (!extractedText || !extractedText.trim()) {
         console.warn('[Pipeline] Extraction failed: empty content', JSON.stringify({ method: extractionMethod }));
@@ -683,6 +693,7 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
         originalInput: url,
         extractedText: auditInputResult.cleanedContent,
         transcript: auditInputResult.cleanedContent,
+        extractedContent: auditInputResult.cleanedContent,
         auditResult
       };
     } catch (error) {
@@ -781,6 +792,7 @@ const processDocumentBuffer = async ({ buffer, mimetype, originalInput, category
     originalInput,
     extractedText,
     transcript: extractedText,
+    extractedContent: extractedText,
     auditResult
   };
 };
@@ -837,6 +849,13 @@ export const processContent = async (input, options = {}) => {
     throw new Error('Unsupported input type');
   }
 
+  const transcriptText = processingResult.transcript || processingResult.extractedText || '';
+  const extractedContent = processingResult.extractedContent || processingResult.extractedText || transcriptText || '';
+  processingResult.auditResult.transcript = transcriptText;
+  processingResult.auditResult.transcription = transcriptText;
+  processingResult.auditResult.extractedContent = extractedContent;
+  processingResult.auditResult.content = extractedContent;
+
   await saveAuditRecord({
     userId,
     contentType: processingResult.contentType,
@@ -854,6 +873,10 @@ export const processContent = async (input, options = {}) => {
   
   return {
     ...processingResult.auditResult,
+    transcript: transcriptText,
+    transcription: transcriptText,
+    extractedContent,
+    content: extractedContent,
     ...benchmarkInfo
   };
 };
