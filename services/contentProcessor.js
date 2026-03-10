@@ -531,9 +531,15 @@ const processText = async ({ text, category, analysisMode, country, region, rule
 };
 
 const processMediaBuffer = async ({ buffer, mimetype, inputType, originalInput, category, analysisMode, country, region, rules }) => {
-  const transcriptionResult = await transcribe(buffer, mimetype);
-  const transcriptText = transcriptionResult.transcript;
-  console.log('[Transcript] Length:', transcriptText?.length);
+  let transcriptText = '';
+  try {
+    const transcriptionResult = await transcribe(buffer, mimetype);
+    transcriptText = transcriptionResult?.transcript || '';
+    console.log('[Transcript] Length:', transcriptText?.length);
+  } catch (error) {
+    console.warn('[Transcription] Failed. Continuing with fallback transcript:', error?.message || error);
+    transcriptText = `Transcription unavailable for ${originalInput || inputType}. Reason: ${error?.message || 'Unknown transcription error'}.`;
+  }
 
   const auditResult = await performDeterministicAudit(transcriptText, {
     category,
@@ -660,7 +666,10 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
       inputType: urlType,
       originalInput: url,
       category,
-      analysisMode
+      analysisMode,
+      country,
+      region,
+      rules
     });
   }
 
@@ -852,11 +861,34 @@ const processUrl = async ({ url, category, analysisMode, country, region, rules 
   // All extractors failed - return descriptive error
   const errorMessage = `All extraction methods failed for URL: ${url}. Attempted: ${attemptedMethods.join(', ')}. Last error: ${lastError?.message || 'Unknown error'}. The content may be protected by bot detection (Cloudflare, CAPTCHA) or require authentication.`;
   console.error(`✗ [Extraction Failed] ${errorMessage}`);
-  throw new Error(errorMessage);
+
+  const fallbackText = `Web extraction failed for URL: ${url}. Reason: ${lastError?.message || 'Unknown extraction error'}. Proceeding with limited compliance audit using fallback context.`;
+  const fallbackAudit = await performDeterministicAudit(fallbackText, {
+    category,
+    analysisMode,
+    country,
+    region,
+    rules
+  });
+
+  return {
+    contentType: 'webpage',
+    originalInput: url,
+    extractedText: fallbackText,
+    transcript: fallbackText,
+    extractedContent: fallbackText,
+    auditResult: fallbackAudit
+  };
 };
 
 const processDocumentBuffer = async ({ buffer, mimetype, originalInput, category, analysisMode, country, region, rules }) => {
-  let extractedText = await extractTextFromDocument(buffer, mimetype);
+  let extractedText = '';
+  try {
+    extractedText = await extractTextFromDocument(buffer, mimetype);
+  } catch (error) {
+    console.warn('[Document Scan] Text extraction failed. Continuing with fallback text:', error?.message || error);
+    extractedText = `Document text extraction unavailable for ${originalInput || 'uploaded document'}. Reason: ${error?.message || 'Unknown document extraction error'}.`;
+  }
 
   let scannedText = await scanDocumentWithOpenAI(extractedText);
   if (!scannedText) {

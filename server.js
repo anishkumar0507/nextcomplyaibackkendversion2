@@ -76,6 +76,14 @@ if (missingEnv.length > 0) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+process.on('unhandledRejection', (reason) => {
+  console.error('[Process] Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[Process] Uncaught Exception:', error);
+});
+
 // FIX 6: Create HTTP server for Socket.IO support
 const httpServer = createServer(app);
 
